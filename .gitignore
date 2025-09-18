@@ -7,3 +7,4 @@ vector_db/
 .DS_Store
 data/ 
 models/
+.env
