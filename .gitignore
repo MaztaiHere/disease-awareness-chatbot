@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+vector_db/
+.idea/
+.vscode/
+.DS_Store
+data/ 
+models/

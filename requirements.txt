@@ -1,0 +1,46 @@
+# Core AI & LangChain
+langchain>=0.2.5
+langchain_community>=0.2.4
+langchain-huggingface>=0.0.3
+chromadb==0.5.0
+
+# Local LLM runtime & bindings
+llama-cpp-python>=0.1.69          # local GGUF model runtime
+# optionally ctransformers can be used instead of llama-cpp-python:
+# ctransformers>=2.2.0
+
+# Transformers & embeddings
+transformers==4.41.2
+sentence-transformers==2.7.0
+huggingface-hub>=0.15.0
+
+# Torch (for some embedding backends)
+torch==2.3.1
+torchvision==0.18.1
+torchaudio==2.3.1
+
+# Tokenizers & related
+sentencepiece==0.2.0
+sacremoses==0.1.1
+
+# Lang detection and translation tools
+langdetect==1.0.9
+
+# UI & Plotting
+streamlit==1.36.0
+matplotlib==3.8.4
+seaborn==0.13.2
+wordcloud==1.9.3
+
+# Data Handling & EDA
+pandas==2.2.2
+numpy==1.26.4
+
+# API Clients & Data Download
+requests==2.31.0
+pdfplumber==0.11.0
+python-dotenv
+
+# Evaluation & extras
+deepeval
+google-generativeai==0.5.4
