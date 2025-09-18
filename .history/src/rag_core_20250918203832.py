@@ -9,12 +9,14 @@ import chromadb
 from pathlib import Path
 from functools import lru_cache
 from typing import Optional, Dict, Any
+
 # LangChain / Vector / LLM Imports
 from langchain_chroma import Chroma
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.llms import LlamaCpp
+
 # Improved language detection
 from lingua import Language, LanguageDetectorBuilder
 from transformers import pipeline, MBart50TokenizerFast, MBartForConditionalGeneration
@@ -182,51 +184,59 @@ class MedicalRAG:
         return "en"  # Fallback to English
 
     def translate_text(self, text: str, target_lang: str, source_lang: Optional[str] = None) -> str:
-        """Translate text using mBART model"""
-        if not text or target_lang == source_lang:
-            return text
-            
-        # Initialize mBART if not already done
-        self._initialize_mbart()
+    """Translate text using mBART model (more deterministic & safer)."""
+    if not text or target_lang == source_lang:
+        return text
+
+    # Ensure mBART is loaded
+    self._initialize_mbart()
+    if self.mbart_model is None or self.mbart_tokenizer is None:
+        logging.error("mBART not available for translation")
+        return text
+
+    # Determine languages
+    if source_lang is None:
+        source_lang = self.detect_language(text)
+
+    if source_lang not in MBART_LANG_CODES or target_lang not in MBART_LANG_CODES:
+        logging.warning(f"Unsupported language pair: {source_lang} -> {target_lang}")
+        return text
+
+    src_code = MBART_LANG_CODES[source_lang]   # e.g. "en_XX"
+    tgt_code = MBART_LANG_CODES[target_lang]   # e.g. "ml_IN"
+
+    try:
+        # set tokenizer languages
+        self.mbart_tokenizer.src_lang = src_code
+
+        # Tokenize. Keep short max_length for translation tasks.
+        encoded = self.mbart_tokenizer(text, return_tensors="pt", truncation=True, max_length=256)
         
-        if self.mbart_model is None or self.mbart_tokenizer is None:
-            logging.error("mBART not available for translation")
-            return text
-            
-        # Determine source language if not provided
-        if source_lang is None:
-            source_lang = self.detect_language(text)
-            
-        # Check if both languages are supported
-        if source_lang not in MBART_LANG_CODES or target_lang not in MBART_LANG_CODES:
-            logging.warning(f"Unsupported language pair: {source_lang} -> {target_lang}")
-            return text
-            
-        try:
-            # Set source and target language codes
-            src_code = MBART_LANG_CODES[source_lang]
-            tgt_code = MBART_LANG_CODES[target_lang]
-            
-            # Tokenize input text
-            self.mbart_tokenizer.src_lang = src_code
-            encoded_input = self.mbart_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-            
-            # Generate translation
+        # Move tensors to model device (CPU or GPU)
+        device = next(self.mbart_model.parameters()).device
+        for k, v in encoded.items():
+            encoded[k] = v.to(device)
+
+        # Generation: deterministic beams, no sampling
+        with torch.no_grad():
             generated_tokens = self.mbart_model.generate(
-                **encoded_input,
-                forced_bos_token_id=self.mbart_tokenizer.lang_code_to_id[tgt_code],
-                max_length=512,
-                num_beams=5,
-                early_stopping=True
+                **encoded,
+                decoder_start_token_id=self.mbart_tokenizer.lang_code_to_id[tgt_code],
+                max_length=128,
+                num_beams=4,
+                early_stopping=True,
+                no_repeat_ngram_size=3,
+                do_sample=False,
             )
-            
-            # Decode the translation
-            translation = self.mbart_tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)[0]
-            return translation
-            
-        except Exception as e:
-            logging.error(f"Translation failed: {e}")
-            return text
+
+        translation = self.mbart_tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)[0].strip()
+        logging.debug("Translation | %s -> %s : %s", src_code, tgt_code, translation)
+        return translation
+
+    except Exception as e:
+        logging.error(f"Translation failed: {e}", exc_info=True)
+        return text
+
 
     def build_vector_store(self, domain):
         collection_name = f"medical_rag_{domain}"
@@ -333,7 +343,7 @@ class MedicalRAG:
             trace["error"] = str(e)
             return {"result": "Sorry, an error occurred.", "source_documents": [], "trace": trace}
 
-if __name__ == "_main_":
+if __name__ == "__main__":
     rag_system = MedicalRAG()
     for domain in ["outbreak", "symptom", "misinformation"]:
         rag_system.build_vector_store(domain)

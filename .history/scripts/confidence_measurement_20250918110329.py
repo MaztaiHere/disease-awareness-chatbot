@@ -9,8 +9,8 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from sentence_transformers import SentenceTransformer, util
 
 # Make src importable
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(_file_), "..")))
-from src.rag_core import MedicalRAG
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.rag_core_gemini import MedicalRAG
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -136,5 +136,5 @@ def evaluate_rag_performance():
     plt.close()
 
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     evaluate_rag_performance()

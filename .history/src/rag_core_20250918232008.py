@@ -6,18 +6,24 @@ import json
 import logging
 import requests
 import chromadb
+import re
 from pathlib import Path
 from functools import lru_cache
 from typing import Optional, Dict, Any
+
 # LangChain / Vector / LLM Imports
 from langchain_chroma import Chroma
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.llms import LlamaCpp
-# Improved language detection
-from lingua import Language, LanguageDetectorBuilder
-from transformers import pipeline, MBart50TokenizerFast, MBartForConditionalGeneration
+
+# Language detection
+from langdetect import detect, DetectorFactory
+DetectorFactory.seed = 0  # For consistent results
+
+# Transformers for translation
+from transformers import MBart50TokenizerFast, MBartForConditionalGeneration
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -27,7 +33,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 PROCESSED_DATA_DIR = str(BASE_DIR / "data" / "processed")
 EMBEDDING_MODEL_NAME = "BAAI/bge-large-en-v1.5"
 PERSIST_DIRECTORY = str(BASE_DIR / "vector_db")
-LLM_MODEL_ID = "mistral-7b-instruct"  # logical name only
+LLM_MODEL_ID = "mistral-7b-instruct"
 
 # Local LLM config (GGUF download)
 MODEL_DIR = str(BASE_DIR / "models")
@@ -38,7 +44,7 @@ MODEL_URL = (
 )
 MODEL_PATH = os.path.join(MODEL_DIR, MODEL_FILENAME)
 
-# mBART Supported Language Codes - Expanded with more languages
+# mBART Supported Language Codes
 MBART_LANG_CODES = {
     "en": "en_XX", "hi": "hi_IN", "ta": "ta_IN", "te": "te_IN", "ml": "ml_IN",
     "bn": "bn_IN", "gu": "gu_IN", "mr": "mr_IN", "kn": "kn_IN", "pa": "pa_IN",
@@ -56,8 +62,20 @@ LANGUAGE_NAMES = {
     "vi": "Vietnamese", "ko": "Korean", "nl": "Dutch", "uk": "Ukrainian", "pl": "Polish"
 }
 
-# Initialize language detector with common languages
-language_detector = LanguageDetectorBuilder.from_all_languages().build()
+# Medical symptom keywords in different languages for accurate detection
+MEDICAL_KEYWORDS = {
+    "ml": ["വേദന", "പനി", "ഛർദ്ദി", "തലവേദന", "അസുഖം", "രോഗം", "ലക്ഷണം", "പുറം", "മുഖം", "ഛർദി", "വാന்தി"],
+    "ta": ["வலி", "காய்ச்சல்", "வாந்தி", "தலைவலி", "நோய்", "அசௌகரியம்", "அறிகுறி", "முதுகு", "முகம்", "வாந்திபோடு"],
+    "hi": ["दर्द", "बुखार", "उल्टी", "सिरदर्द", "बीमारी", "तकलीफ", "लक्षण", "पीठ", "चेहरा", "वमन"],
+    "en": ["pain", "fever", "vomit", "headache", "sickness", "discomfort", "symptom", "back", "face", "nausea"]
+}
+
+# Common medical condition mappings for better translation
+MEDICAL_TERM_MAPPING = {
+    "ml": {"വേദന": "pain", "പുറം വേദന": "back pain", "തലവേദന": "headache", "ഛർദ്ദി": "vomiting"},
+    "ta": {"வலி": "pain", "முதுகுவலி": "back pain", "தலைவலி": "headache", "வாந்தி": "vomiting"},
+    "hi": {"दर्द": "pain", "पीठ दर्द": "back pain", "सिरदर्द": "headache", "उल्टी": "vomiting"}
+}
 
 class MedicalRAG:
     """
@@ -139,50 +157,48 @@ class MedicalRAG:
             self.mbart_tokenizer = None
 
     def detect_language(self, text: str) -> str:
-        """Improved language detection using lingua"""
+        """Accurate language detection with medical keyword matching"""
         if not text or len(text.strip()) < 3:
-            return "en"  # Default to English for very short texts
-            
+            return "en"
+        
+        # First try keyword-based detection for medical terms (more reliable)
+        text_lower = text.lower()
+        for lang_code, keywords in MEDICAL_KEYWORDS.items():
+            for keyword in keywords:
+                if keyword in text_lower:
+                    logging.info(f"Detected language {lang_code} via medical keyword '{keyword}'")
+                    return lang_code
+        
+        # Then use langdetect for general detection
         try:
-            # Use lingua for more reliable detection
-            detected_language = language_detector.detect_language_of(text)
-            if detected_language:
-                # Map lingua language to ISO code
-                language_map = {
-                    Language.ENGLISH: "en",
-                    Language.HINDI: "hi",
-                    Language.TAMIL: "ta",
-                    Language.TELUGU: "te",
-                    Language.MALAYALAM: "ml",
-                    Language.BENGALI: "bn",
-                    Language.GUJARATI: "gu",
-                    Language.MARATHI: "mr",
-                    Language.KANNADA: "kn",
-                    Language.PUNJABI: "pa",
-                    Language.SPANISH: "es",
-                    Language.FRENCH: "fr",
-                    Language.GERMAN: "de",
-                    Language.ITALIAN: "it",
-                    Language.JAPANESE: "ja",
-                    Language.RUSSIAN: "ru",
-                    Language.CHINESE: "zh",
-                    Language.ARABIC: "ar",
-                    Language.PORTUGUESE: "pt",
-                    Language.TURKISH: "tr",
-                    Language.VIETNAMESE: "vi",
-                    Language.KOREAN: "ko",
-                    Language.DUTCH: "nl",
-                    Language.UKRAINIAN: "uk",
-                    Language.POLISH: "pl"
-                }
-                return language_map.get(detected_language, "en")
+            detected_lang = detect(text)
+            logging.info(f"langdetect identified language: {detected_lang}")
+            
+            # Map to supported languages and handle variations
+            lang_mapping = {
+                'zh-cn': 'zh', 'zh-tw': 'zh', 
+                'pt-br': 'pt', 'pt-pt': 'pt',
+                'ja': 'ja', 'ko': 'ko', 'ru': 'ru',
+                'ar': 'ar', 'es': 'es', 'fr': 'fr',
+                'de': 'de', 'it': 'it', 'nl': 'nl'
+            }
+            
+            final_lang = lang_mapping.get(detected_lang, detected_lang)
+            
+            # Only return if it's a supported language
+            if final_lang in MBART_LANG_CODES:
+                return final_lang
+            else:
+                logging.warning(f"Detected language {final_lang} not in supported MBART languages")
+                return "en"
+                
         except Exception as e:
             logging.warning(f"Language detection failed: {e}")
-            
-        return "en"  # Fallback to English
+        
+        return "en"
 
-    def translate_text(self, text: str, target_lang: str, source_lang: Optional[str] = None) -> str:
-        """Translate text using mBART model"""
+    def translate_medical_text(self, text: str, target_lang: str, source_lang: Optional[str] = None) -> str:
+        """Improved translation with medical term handling"""
         if not text or target_lang == source_lang:
             return text
             
@@ -203,6 +219,13 @@ class MedicalRAG:
             return text
             
         try:
+            # For medical terms, try direct mapping first
+            if source_lang in MEDICAL_TERM_MAPPING and target_lang == "en":
+                for local_term, english_term in MEDICAL_TERM_MAPPING[source_lang].items():
+                    if local_term in text:
+                        text = text.replace(local_term, english_term)
+                        logging.info(f"Translated medical term: {local_term} -> {english_term}")
+            
             # Set source and target language codes
             src_code = MBART_LANG_CODES[source_lang]
             tgt_code = MBART_LANG_CODES[target_lang]
@@ -256,10 +279,14 @@ class MedicalRAG:
 
     def _initialize_chains(self):
         chains = {}
+        # Improved prompt template to prevent hallucinations
         prompt_template = """
-        Use ONLY the provided context to answer the question.
-        Write the answer in clear, complete sentences.
-        If the context does not contain an answer, state: "Based on the available data, I cannot provide an answer."
+        You are a medical assistant. Use ONLY the provided context to answer the question.
+        If the context does not contain information about the specific symptom or condition mentioned, 
+        state clearly: "Based on the available data, I cannot provide specific information about [the mentioned symptom/condition]."
+        
+        Do not make up information or provide information about unrelated conditions.
+        Be precise and only discuss what is directly relevant to the question.
 
         Context: {context}
         Question: {question}
@@ -291,7 +318,7 @@ class MedicalRAG:
         trace = {"input_query": user_query, "domain": domain}
 
         if domain not in self.chains:
-            return {"result": "Error", "source_documents": [], "trace": trace}
+            return {"result": "Error: Domain not available", "source_documents": [], "trace": trace}
 
         try:
             # Detect language of the query
@@ -304,8 +331,8 @@ class MedicalRAG:
                 
             # Translate to English if needed for processing
             if original_lang != "en":
-                english_query = self.translate_text(user_query, "en", source_lang=original_lang)
-                trace["translation_status"] = f"Translated from {original_lang} to en"
+                english_query = self.translate_medical_text(user_query, "en", source_lang=original_lang)
+                trace["translation_status"] = f"Translated from {original_lang} to en: {english_query}"
             else:
                 english_query = user_query
                 trace["translation_status"] = "Already English"
@@ -314,15 +341,16 @@ class MedicalRAG:
 
             # Process the query
             response = self.chains[domain].invoke({"query": english_query})
-            trace["llm_raw_output"] = response.get("result", "")
+            english_result = response.get("result", "No response generated")
+            trace["llm_raw_output"] = english_result
 
             # Translate response back to target language if needed
             if target_lang != "en":
-                translated = self.translate_text(response["result"], target_lang, source_lang="en")
+                translated = self.translate_medical_text(english_result, target_lang, source_lang="en")
                 response["result"] = translated
                 trace["translated_result"] = translated
             else:
-                trace["translated_result"] = response.get("result", "")
+                trace["translated_result"] = english_result
 
             if debug:
                 response["trace"] = trace
@@ -331,9 +359,9 @@ class MedicalRAG:
         except Exception as e:
             logging.error("Error during RAG query: %s", e)
             trace["error"] = str(e)
-            return {"result": "Sorry, an error occurred.", "source_documents": [], "trace": trace}
+            return {"result": "Sorry, an error occurred while processing your query.", "source_documents": [], "trace": trace}
 
-if __name__ == "_main_":
+if __name__ == "__main__":
     rag_system = MedicalRAG()
     for domain in ["outbreak", "symptom", "misinformation"]:
         rag_system.build_vector_store(domain)

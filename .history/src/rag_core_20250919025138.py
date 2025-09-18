@@ -67,7 +67,7 @@ class MedicalRAG:
     - Translation handled with mBART
     """
 
-    def __init__(self):
+    def _init_(self):
         logging.info("Initializing MedicalRAG system...")
         os.makedirs(PERSIST_DIRECTORY, exist_ok=True)
         os.makedirs(MODEL_DIR, exist_ok=True)

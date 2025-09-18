@@ -2,7 +2,7 @@
 # src/app.py
 import streamlit as st
 import sys, os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(_file_), "..")))
 from src.rag_core import MedicalRAG, LANGUAGE_NAMES
 
 st.set_page_config(page_title="Medical AI Assistant", page_icon="⚕️", layout="wide")

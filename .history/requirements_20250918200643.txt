@@ -2,7 +2,7 @@
 langchain==0.1.16
 langchain-community==0.0.32
 langchain-huggingface==0.0.3
-langchain-chroma
+langchain-chroma==0.1.0
 chromadb==0.4.24
 
 # Local LLM runtime & bindings

@@ -23,7 +23,7 @@ from transformers import pipeline, MBart50TokenizerFast, MBartForConditionalGene
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # --- Configuration ---
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(_file_).resolve().parent.parent
 PROCESSED_DATA_DIR = str(BASE_DIR / "data" / "processed")
 EMBEDDING_MODEL_NAME = "BAAI/bge-large-en-v1.5"
 PERSIST_DIRECTORY = str(BASE_DIR / "vector_db")
@@ -67,7 +67,7 @@ class MedicalRAG:
     - Translation handled with mBART
     """
 
-    def __init__(self):
+    def _init_(self):
         logging.info("Initializing MedicalRAG system...")
         os.makedirs(PERSIST_DIRECTORY, exist_ok=True)
         os.makedirs(MODEL_DIR, exist_ok=True)
@@ -333,7 +333,7 @@ class MedicalRAG:
             trace["error"] = str(e)
             return {"result": "Sorry, an error occurred.", "source_documents": [], "trace": trace}
 
-if __name__ == "_main_":
+if _name_ == "_main_":
     rag_system = MedicalRAG()
     for domain in ["outbreak", "symptom", "misinformation"]:
         rag_system.build_vector_store(domain)

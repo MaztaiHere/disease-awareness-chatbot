@@ -1,7 +1,7 @@
-
 # src/app.py
 import streamlit as st
-import sys, os
+import sys
+import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.rag_core import MedicalRAG, LANGUAGE_NAMES
 
@@ -12,8 +12,6 @@ def load_rag_system():
     """Loads the RAG system once and caches it."""
     return MedicalRAG()
 
-# This is the only time MedicalRAG() is called.
-# It handles all initialization, including building vector stores if needed.
 rag_system = load_rag_system()
 
 if "messages" not in st.session_state:
@@ -44,9 +42,15 @@ with st.sidebar:
         "Choose a Public Health Domain:",
         ("Symptom Analysis", "Outbreak Alerts", "Misinformation Classification")
     )
+    
+    # Add a clear conversation button
+    if st.button("Clear Conversation"):
+        st.session_state.messages = {}
+        st.rerun()
+    
     st.divider()
     st.warning(
-        "*Disclaimer:* This is a proof-of-concept AI assistant and not a substitute for professional medical advice."
+        "**Disclaimer:** This is a proof-of-concept AI assistant and not a substitute for professional medical advice. Always consult a healthcare professional for medical concerns."
     )
 
 domain_map = {
@@ -59,26 +63,29 @@ current_domain_key = domain_map[selected_domain_ui]
 if current_domain_key not in st.session_state.messages:
     st.session_state.messages[current_domain_key] = []
 
+# Display conversation history
 for message in st.session_state.messages[current_domain_key]:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if "sources" in message and message["sources"]:
             with st.expander("View Sources"):
                 for i, doc in enumerate(message["sources"]):
-                    # Some source documents may be dict-like instead of proper metadata object
                     source_meta = getattr(doc, "metadata", None) or (doc.get("metadata") if isinstance(doc, dict) else {})
                     page_content = getattr(doc, "page_content", None) or (doc.get("page_content") if isinstance(doc, dict) else str(doc))
-                    st.info(f"*Source {i+1}:* {source_meta.get('source', 'N/A')}\n\n*Content:* {page_content}")
+                    st.info(f"**Source {i+1}:** {source_meta.get('source', 'N/A')}\n\n**Content:** {page_content}")
 
+# Chat input
 if prompt := st.chat_input(f"Ask about {selected_domain_ui}..."):
     st.session_state.messages[current_domain_key].append({"role": "user", "content": prompt})
+    
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
+        with st.spinner("Analyzing your query..."):
             response = rag_system.query(prompt, current_domain_key, target_lang=st.session_state.language)
-            # response is expected to be a dict: {"result": "...", "source_documents": [...]}
+            
+            # Handle response
             result_text = response.get("result") if isinstance(response, dict) else str(response)
             st.markdown(result_text)
 
@@ -88,7 +95,7 @@ if prompt := st.chat_input(f"Ask about {selected_domain_ui}..."):
                     for i, doc in enumerate(source_docs):
                         source_meta = getattr(doc, "metadata", None) or (doc.get("metadata") if isinstance(doc, dict) else {})
                         page_content = getattr(doc, "page_content", None) or (doc.get("page_content") if isinstance(doc, dict) else str(doc))
-                        st.info(f"*Source {i+1}:* {source_meta.get('source', 'N/A')}\n\n*Content:* {page_content}")
+                        st.info(f"**Source {i+1}:** {source_meta.get('source', 'N/A')}\n\n**Content:** {page_content}")
 
             assistant_message = {"role": "assistant", "content": result_text, "sources": source_docs}
             st.session_state.messages[current_domain_key].append(assistant_message)

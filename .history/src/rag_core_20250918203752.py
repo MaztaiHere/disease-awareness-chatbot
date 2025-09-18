@@ -9,12 +9,14 @@ import chromadb
 from pathlib import Path
 from functools import lru_cache
 from typing import Optional, Dict, Any
+
 # LangChain / Vector / LLM Imports
 from langchain_chroma import Chroma
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.llms import LlamaCpp
+
 # Improved language detection
 from lingua import Language, LanguageDetectorBuilder
 from transformers import pipeline, MBart50TokenizerFast, MBartForConditionalGeneration
@@ -333,7 +335,7 @@ class MedicalRAG:
             trace["error"] = str(e)
             return {"result": "Sorry, an error occurred.", "source_documents": [], "trace": trace}
 
-if __name__ == "_main_":
+if __name__ == "__main__":
     rag_system = MedicalRAG()
     for domain in ["outbreak", "symptom", "misinformation"]:
         rag_system.build_vector_store(domain)

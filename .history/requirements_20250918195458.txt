@@ -1,0 +1,45 @@
+# Core AI & LangChain
+langchain>=0.2.5
+langchain_community>=0.2.4
+langchain-huggingface>=0.0.3
+langchain-chroma
+
+# Local LLM runtime & bindings
+llama-cpp-python>=0.1.69
+
+# Transformers & embeddings
+transformers==4.41.2
+sentence-transformers==2.7.0
+huggingface-hub>=0.15.0
+
+# Torch
+torch==2.3.1
+torchvision==0.18.1
+torchaudio==2.3.1
+
+# Tokenizers & related
+sentencepiece==0.2.0
+sacremoses==0.1.1
+
+# Lang detection and translation tools
+lingua-language-detector==1.3.2
+
+# UI & Plotting
+streamlit==1.36.0
+matplotlib==3.8.4
+seaborn==0.13.2
+wordcloud==1.9.3
+
+# Data Handling & EDA
+pandas==2.2.2
+numpy==1.26.4
+
+# API Clients & Data Download
+requests==2.31.0
+pdfplumber==0.11.0
+python-dotenv
+
+# Evaluation & extras
+deepeval
+google-generativeai==0.5.4
+protobuf>=3.20.0

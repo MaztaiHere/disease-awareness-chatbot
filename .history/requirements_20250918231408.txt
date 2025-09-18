@@ -1,0 +1,83 @@
+# Core AI & LangChain
+langchain==0.1.16
+langchain-community==0.0.32
+langchain-huggingface==0.0.3
+langchain-chroma==0.2.6  # Updated to available version
+chromadb==0.4.24
+
+# Local LLM runtime & bindings
+llama-cpp-python==0.2.20
+
+# Transformers & embeddings
+sentence-transformers==2.6.1
+huggingface-hub==0.20.3
+transformers==4.38.2
+
+# Torch (compatible versions)
+torch==2.2.1
+torchvision==0.17.1
+torchaudio==2.2.1
+
+# Language detection (using langdetect instead of lingua to avoid conflicts)
+langdetect==1.0.9
+
+# Tokenizers
+sacremoses==0.1.1
+
+# UI & Plotting
+streamlit==1.32.2
+
+# Data Handling & EDA
+pandas==2.2.1
+numpy==1.26.4
+
+# API Clients & Data Download
+requests==2.31.0
+pdfplumber==0.11.0# Core AI & LangChain
+langchain==0.1.16
+langchain-community==0.0.32
+langchain-huggingface==0.0.3
+langchain-chroma==0.2.6
+chromadb==0.4.24
+
+# Local LLM runtime & bindings
+llama-cpp-python==0.2.20
+
+# Transformers & embeddings (compatible versions)
+sentence-transformers==2.6.1
+huggingface-hub==0.23.0  # Updated to match langchain-huggingface requirement
+transformers==4.38.2
+
+# Torch (compatible versions)
+torch==2.2.1
+torchvision==0.17.1
+torchaudio==2.2.1
+
+# Language detection (using langdetect instead of lingua)
+langdetect==1.0.9
+
+# Tokenizers
+sacremoses==0.1.1
+
+# UI & Plotting
+streamlit==1.32.2
+
+# Data Handling & EDA
+pandas==2.2.1
+numpy==1.26.4
+
+# API Clients & Data Download
+requests==2.31.0
+pdfplumber==0.11.0
+python-dotenv==1.0.1
+
+# Additional dependencies
+protobuf==3.20.3
+tqdm==4.66.2
+sentencepiece==0.2.0
+python-dotenv==1.0.1
+
+# Additional dependencies
+protobuf==3.20.3
+tqdm==4.66.2
+sentencepiece==0.2.0

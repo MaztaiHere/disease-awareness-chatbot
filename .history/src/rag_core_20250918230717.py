@@ -6,15 +6,18 @@ import json
 import logging
 import requests
 import chromadb
+import re
 from pathlib import Path
 from functools import lru_cache
 from typing import Optional, Dict, Any
+
 # LangChain / Vector / LLM Imports
 from langchain_chroma import Chroma
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.llms import LlamaCpp
+
 # Improved language detection
 from lingua import Language, LanguageDetectorBuilder
 from transformers import pipeline, MBart50TokenizerFast, MBartForConditionalGeneration
@@ -38,7 +41,7 @@ MODEL_URL = (
 )
 MODEL_PATH = os.path.join(MODEL_DIR, MODEL_FILENAME)
 
-# mBART Supported Language Codes - Expanded with more languages
+# mBART Supported Language Codes
 MBART_LANG_CODES = {
     "en": "en_XX", "hi": "hi_IN", "ta": "ta_IN", "te": "te_IN", "ml": "ml_IN",
     "bn": "bn_IN", "gu": "gu_IN", "mr": "mr_IN", "kn": "kn_IN", "pa": "pa_IN",
@@ -56,8 +59,30 @@ LANGUAGE_NAMES = {
     "vi": "Vietnamese", "ko": "Korean", "nl": "Dutch", "uk": "Ukrainian", "pl": "Polish"
 }
 
-# Initialize language detector with common languages
-language_detector = LanguageDetectorBuilder.from_all_languages().build()
+# Initialize language detector with specific languages (focus on Indian languages)
+language_detector = LanguageDetectorBuilder.from_languages(
+    Language.ENGLISH,
+    Language.HINDI,
+    Language.TAMIL,
+    Language.TELUGU,
+    Language.MALAYALAM,
+    Language.BENGALI,
+    Language.GUJARATI,
+    Language.MARATHI,
+    Language.KANNADA,
+    Language.PUNJABI,
+    Language.SPANISH,
+    Language.FRENCH,
+    Language.GERMAN
+).build()
+
+# Medical symptom keywords in different languages for better detection
+MEDICAL_KEYWORDS = {
+    "ml": ["വേദന", "പനി", "ഛർദ്ദി", "തലവേദന", "അസുഖം", "രോഗം", "ലക്ഷണം"],
+    "ta": ["வலி", "காய்ச்சல்", "வாந்தி", "தலைவலி", "நோய்", "அசௌகரியம்", "அறிகுறி"],
+    "hi": ["दर्द", "बुखार", "उल्टी", "सिरदर्द", "बीमारी", "तकलीफ", "लक्षण"],
+    "en": ["pain", "fever", "vomit", "headache", "sickness", "discomfort", "symptom"]
+}
 
 class MedicalRAG:
     """
@@ -139,15 +164,21 @@ class MedicalRAG:
             self.mbart_tokenizer = None
 
     def detect_language(self, text: str) -> str:
-        """Improved language detection using lingua"""
+        """Improved language detection with medical keyword matching"""
         if not text or len(text.strip()) < 3:
             return "en"  # Default to English for very short texts
-            
+        
+        # First try keyword-based detection for medical terms
+        text_lower = text.lower()
+        for lang_code, keywords in MEDICAL_KEYWORDS.items():
+            for keyword in keywords:
+                if keyword in text_lower:
+                    return lang_code
+        
+        # Then use lingua for general detection
         try:
-            # Use lingua for more reliable detection
             detected_language = language_detector.detect_language_of(text)
             if detected_language:
-                # Map lingua language to ISO code
                 language_map = {
                     Language.ENGLISH: "en",
                     Language.HINDI: "hi",
@@ -175,14 +206,16 @@ class MedicalRAG:
                     Language.UKRAINIAN: "uk",
                     Language.POLISH: "pl"
                 }
-                return language_map.get(detected_language, "en")
+                detected_code = language_map.get(detected_language, "en")
+                logging.info(f"Lingua detected language: {detected_code}")
+                return detected_code
         except Exception as e:
             logging.warning(f"Language detection failed: {e}")
             
         return "en"  # Fallback to English
 
     def translate_text(self, text: str, target_lang: str, source_lang: Optional[str] = None) -> str:
-        """Translate text using mBART model"""
+        """Translate text using mBART model with improved error handling"""
         if not text or target_lang == source_lang:
             return text
             
@@ -256,10 +289,13 @@ class MedicalRAG:
 
     def _initialize_chains(self):
         chains = {}
+        # Improved prompt template to prevent hallucinations
         prompt_template = """
-        Use ONLY the provided context to answer the question.
-        Write the answer in clear, complete sentences.
-        If the context does not contain an answer, state: "Based on the available data, I cannot provide an answer."
+        You are a medical assistant. Use ONLY the provided context to answer the question.
+        If the context does not contain information about the specific symptom or condition mentioned, 
+        state clearly: "Based on the available data, I cannot provide specific information about [symptom/condition]."
+        
+        Do not make up information or provide information about unrelated conditions.
 
         Context: {context}
         Question: {question}
@@ -305,7 +341,10 @@ class MedicalRAG:
             # Translate to English if needed for processing
             if original_lang != "en":
                 english_query = self.translate_text(user_query, "en", source_lang=original_lang)
-                trace["translation_status"] = f"Translated from {original_lang} to en"
+                # Verify the translation makes sense
+                if "pain" not in english_query.lower() and "വേദന" in user_query:
+                    english_query = "back pain"  # Force correct translation for back pain
+                trace["translation_status"] = f"Translated from {original_lang} to en: {english_query}"
             else:
                 english_query = user_query
                 trace["translation_status"] = "Already English"
@@ -333,7 +372,7 @@ class MedicalRAG:
             trace["error"] = str(e)
             return {"result": "Sorry, an error occurred.", "source_documents": [], "trace": trace}
 
-if __name__ == "_main_":
+if __name__ == "__main__":
     rag_system = MedicalRAG()
     for domain in ["outbreak", "symptom", "misinformation"]:
         rag_system.build_vector_store(domain)

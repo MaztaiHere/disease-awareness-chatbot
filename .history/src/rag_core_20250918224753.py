@@ -333,7 +333,7 @@ class MedicalRAG:
             trace["error"] = str(e)
             return {"result": "Sorry, an error occurred.", "source_documents": [], "trace": trace}
 
-if __name__ == "_main_":
+if __name__ == "__main__":
     rag_system = MedicalRAG()
     for domain in ["outbreak", "symptom", "misinformation"]:
         rag_system.build_vector_store(domain)

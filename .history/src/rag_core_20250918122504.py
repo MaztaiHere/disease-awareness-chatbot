@@ -8,16 +8,18 @@ import requests
 import chromadb
 from pathlib import Path
 from functools import lru_cache
-from typing import Optional, Dict, Any
+from typing import Optional
+
 # LangChain / Vector / LLM Imports
 from langchain_chroma import Chroma
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.llms import LlamaCpp
-# Improved language detection
-from lingua import Language, LanguageDetectorBuilder
-from transformers import pipeline, MBart50TokenizerFast, MBartForConditionalGeneration
+
+# Hugging Face translation pipeline
+from langdetect import detect
+from transformers import pipeline
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -38,33 +40,25 @@ MODEL_URL = (
 )
 MODEL_PATH = os.path.join(MODEL_DIR, MODEL_FILENAME)
 
-# mBART Supported Language Codes - Expanded with more languages
+# mBART Supported Language Codes
 MBART_LANG_CODES = {
     "en": "en_XX", "hi": "hi_IN", "ta": "ta_IN", "te": "te_IN", "ml": "ml_IN",
-    "bn": "bn_IN", "gu": "gu_IN", "mr": "mr_IN", "kn": "kn_IN", "pa": "pa_IN",
-    "es": "es_XX", "fr": "fr_XX", "de": "de_DE", "it": "it_IT", "ja": "ja_XX",
-    "ru": "ru_RU", "zh": "zh_CN", "ar": "ar_AR", "pt": "pt_XX", "tr": "tr_TR",
-    "vi": "vi_VN", "ko": "ko_KR", "nl": "nl_XX", "uk": "uk_UA", "pl": "pl_PL"
+    "bn": "bn_IN", "gu": "gu_IN", "mr": "mr_IN", "kn": "kn_IN",
+    # Add other languages mBART supports here if needed
+    "es": "es_XX", "fr": "fr_XX", "de": "de_DE", "it": "it_IT", "ja": "ja_XX"
 }
 
-# Language name mapping for UI
-LANGUAGE_NAMES = {
-    "en": "English", "hi": "Hindi", "ta": "Tamil", "te": "Telugu", "ml": "Malayalam",
-    "bn": "Bengali", "gu": "Gujarati", "mr": "Marathi", "kn": "Kannada", "pa": "Punjabi",
-    "es": "Spanish", "fr": "French", "de": "German", "it": "Italian", "ja": "Japanese",
-    "ru": "Russian", "zh": "Chinese", "ar": "Arabic", "pt": "Portuguese", "tr": "Turkish",
-    "vi": "Vietnamese", "ko": "Korean", "nl": "Dutch", "uk": "Ukrainian", "pl": "Polish"
-}
-
-# Initialize language detector with common languages
-language_detector = LanguageDetectorBuilder.from_all_languages().build()
+# Cached mBART pipeline (lazy load once)
+@lru_cache(maxsize=1)
+def get_mbart_pipeline():
+    return pipeline("translation", model="facebook/mbart-large-50-many-to-many-mmt")
 
 class MedicalRAG:
     """
     Retrieval-Augmented Generation system for medical/public health.
     - Local LLM (via llama-cpp GGUF)
     - Chroma vector DB with HuggingFace embeddings
-    - Translation handled with mBART
+    - Translation handled exclusively with mBART
     """
 
     def __init__(self):
@@ -77,8 +71,7 @@ class MedicalRAG:
         self.embedding_function = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
         self.vector_store_client = chromadb.PersistentClient(path=PERSIST_DIRECTORY)
         self.llm = self._initialize_llm()
-        self.mbart_model = None
-        self.mbart_tokenizer = None
+        self.mbart_pipeline: Optional[pipeline] = None
         self.chains = self._initialize_chains()
         logging.info("MedicalRAG system initialized.")
 
@@ -89,7 +82,7 @@ class MedicalRAG:
 
         logging.info("Downloading GGUF model...")
         try:
-            with requests.get(MODEL_URL, stream=True, timeout=600) as r:
+            with requests.get(MODEL_URL, stream=True, timeout=600) as r: # Increased timeout
                 r.raise_for_status()
                 total = int(r.headers.get("content-length", 0))
                 downloaded = 0
@@ -100,7 +93,7 @@ class MedicalRAG:
                             downloaded += len(chunk)
                             if total:
                                 pct = downloaded / total * 100
-                                if downloaded % (1024 * 1024 * 50) < 8192:
+                                if downloaded % (1024 * 1024 * 50) < 8192: # Log every 50MB
                                     logging.info(f"Downloaded {pct:.1f}%")
             logging.info("Model downloaded successfully.")
         except Exception as e:
@@ -123,109 +116,38 @@ class MedicalRAG:
             logging.error(f"Failed to initialize local LLM: {e}")
             return None
 
-    def _initialize_mbart(self):
-        """Initialize mBART model and tokenizer for translation"""
-        if self.mbart_model is not None and self.mbart_tokenizer is not None:
-            return
-            
+    def _get_mbart_pipeline(self):
+        if self.mbart_pipeline is not None:
+            return self.mbart_pipeline
         try:
-            logging.info("Loading mBART model and tokenizer...")
-            self.mbart_model = MBartForConditionalGeneration.from_pretrained("facebook/mbart-large-50-many-to-many-mmt")
-            self.mbart_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50-many-to-many-mmt")
-            logging.info("mBART model and tokenizer loaded successfully.")
+            logging.info("Initializing mBART pipeline...")
+            self.mbart_pipeline = get_mbart_pipeline()
+            return self.mbart_pipeline
         except Exception as e:
-            logging.error(f"Failed to load mBART model: {e}")
-            self.mbart_model = None
-            self.mbart_tokenizer = None
-
-    def detect_language(self, text: str) -> str:
-        """Improved language detection using lingua"""
-        if not text or len(text.strip()) < 3:
-            return "en"  # Default to English for very short texts
-            
-        try:
-            # Use lingua for more reliable detection
-            detected_language = language_detector.detect_language_of(text)
-            if detected_language:
-                # Map lingua language to ISO code
-                language_map = {
-                    Language.ENGLISH: "en",
-                    Language.HINDI: "hi",
-                    Language.TAMIL: "ta",
-                    Language.TELUGU: "te",
-                    Language.MALAYALAM: "ml",
-                    Language.BENGALI: "bn",
-                    Language.GUJARATI: "gu",
-                    Language.MARATHI: "mr",
-                    Language.KANNADA: "kn",
-                    Language.PUNJABI: "pa",
-                    Language.SPANISH: "es",
-                    Language.FRENCH: "fr",
-                    Language.GERMAN: "de",
-                    Language.ITALIAN: "it",
-                    Language.JAPANESE: "ja",
-                    Language.RUSSIAN: "ru",
-                    Language.CHINESE: "zh",
-                    Language.ARABIC: "ar",
-                    Language.PORTUGUESE: "pt",
-                    Language.TURKISH: "tr",
-                    Language.VIETNAMESE: "vi",
-                    Language.KOREAN: "ko",
-                    Language.DUTCH: "nl",
-                    Language.UKRAINIAN: "uk",
-                    Language.POLISH: "pl"
-                }
-                return language_map.get(detected_language, "en")
-        except Exception as e:
-            logging.warning(f"Language detection failed: {e}")
-            
-        return "en"  # Fallback to English
+            logging.error("Failed to init mBART pipeline: %s", e)
+            return None
 
     def translate_text(self, text: str, target_lang: str, source_lang: Optional[str] = None) -> str:
-        """Translate text using mBART model"""
-        if not text or target_lang == source_lang:
-            return text
-            
-        # Initialize mBART if not already done
-        self._initialize_mbart()
+        if not text: return ""
+        if not source_lang:
+            try:
+                source_lang = detect(text)
+            except Exception:
+                source_lang = "en"
         
-        if self.mbart_model is None or self.mbart_tokenizer is None:
-            logging.error("mBART not available for translation")
-            return text
-            
-        # Determine source language if not provided
-        if source_lang is None:
-            source_lang = self.detect_language(text)
-            
-        # Check if both languages are supported
-        if source_lang not in MBART_LANG_CODES or target_lang not in MBART_LANG_CODES:
-            logging.warning(f"Unsupported language pair: {source_lang} -> {target_lang}")
-            return text
-            
+        if source_lang == target_lang: return text
+
+        mbart = self._get_mbart_pipeline()
+        if not mbart: return text
+
+        src_code = MBART_LANG_CODES.get(source_lang, "en_XX")
+        tgt_code = MBART_LANG_CODES.get(target_lang, "en_XX")
+
         try:
-            # Set source and target language codes
-            src_code = MBART_LANG_CODES[source_lang]
-            tgt_code = MBART_LANG_CODES[target_lang]
-            
-            # Tokenize input text
-            self.mbart_tokenizer.src_lang = src_code
-            encoded_input = self.mbart_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-            
-            # Generate translation
-            generated_tokens = self.mbart_model.generate(
-                **encoded_input,
-                forced_bos_token_id=self.mbart_tokenizer.lang_code_to_id[tgt_code],
-                max_length=512,
-                num_beams=5,
-                early_stopping=True
-            )
-            
-            # Decode the translation
-            translation = self.mbart_tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)[0]
-            return translation
-            
+            out = mbart(text, src_lang=src_code, tgt_lang=tgt_code)
+            return out[0]["translation_text"]
         except Exception as e:
-            logging.error(f"Translation failed: {e}")
+            logging.warning("mBART translation failed: %s", e)
             return text
 
     def build_vector_store(self, domain):
@@ -287,38 +209,42 @@ class MedicalRAG:
                 logging.warning("Could not init chain for '%s': %s", domain, e)
         return chains
 
-    def query(self, user_query: str, domain: str, target_lang: Optional[str] = None, debug: bool = True):
+    def query(self, user_query: str, domain: str, debug: bool = True):
         trace = {"input_query": user_query, "domain": domain}
 
         if domain not in self.chains:
             return {"result": "Error", "source_documents": [], "trace": trace}
 
         try:
-            # Detect language of the query
-            original_lang = self.detect_language(user_query)
+            original_lang = detect(user_query)
             trace["detected_lang"] = original_lang
             
-            # If target language is not specified, use the detected language
-            if target_lang is None:
-                target_lang = original_lang
-                
-            # Translate to English if needed for processing
-            if original_lang != "en":
-                english_query = self.translate_text(user_query, "en", source_lang=original_lang)
-                trace["translation_status"] = f"Translated from {original_lang} to en"
-            else:
+            if original_lang not in MBART_LANG_CODES:
+                english_query = user_query
+                original_lang = "en"
+                trace["translation_status"] = "Unsupported language, treated as English"
+            elif original_lang == "en":
                 english_query = user_query
                 trace["translation_status"] = "Already English"
-            
-            trace["english_query"] = english_query
+            else:
+                english_query = self.translate_text(user_query, "en", source_lang=original_lang)
+                trace["translation_status"] = f"Translated from {original_lang} to en"
 
-            # Process the query
+        except Exception as e:
+            logging.warning(f"Language detection failed: {e}. Assuming English.")
+            original_lang = "en"
+            english_query = user_query
+            trace["detected_lang"] = "en (detection failed)"
+            trace["translation_status"] = "Assumed English"
+        
+        trace["english_query"] = english_query
+
+        try:
             response = self.chains[domain].invoke({"query": english_query})
             trace["llm_raw_output"] = response.get("result", "")
 
-            # Translate response back to target language if needed
-            if target_lang != "en":
-                translated = self.translate_text(response["result"], target_lang, source_lang="en")
+            if original_lang != "en":
+                translated = self.translate_text(response["result"], original_lang, source_lang="en")
                 response["result"] = translated
                 trace["translated_result"] = translated
             else:
@@ -333,7 +259,7 @@ class MedicalRAG:
             trace["error"] = str(e)
             return {"result": "Sorry, an error occurred.", "source_documents": [], "trace": trace}
 
-if __name__ == "_main_":
+if __name__ == "__main__":
     rag_system = MedicalRAG()
     for domain in ["outbreak", "symptom", "misinformation"]:
         rag_system.build_vector_store(domain)
@@ -343,10 +269,7 @@ if __name__ == "_main_":
         q = input("Query: ")
         if q.lower().strip() == "exit":
             break
-        lang = input("Target language (en, hi, es, etc.) or press Enter for auto-detection: ").strip()
-        if not lang:
-            lang = None
-        res = rag_system.query(q, domain="symptom", target_lang=lang)
+        res = rag_system.query(q, domain="symptom")
         print("\nAnswer:", res["result"])
         if "trace" in res:
             print("\nTrace:")

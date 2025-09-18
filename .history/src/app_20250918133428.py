@@ -1,4 +1,3 @@
-
 # src/app.py
 import streamlit as st
 import sys, os
@@ -46,7 +45,7 @@ with st.sidebar:
     )
     st.divider()
     st.warning(
-        "*Disclaimer:* This is a proof-of-concept AI assistant and not a substitute for professional medical advice."
+        "**Disclaimer:** This is a proof-of-concept AI assistant and not a substitute for professional medical advice."
     )
 
 domain_map = {
@@ -68,7 +67,7 @@ for message in st.session_state.messages[current_domain_key]:
                     # Some source documents may be dict-like instead of proper metadata object
                     source_meta = getattr(doc, "metadata", None) or (doc.get("metadata") if isinstance(doc, dict) else {})
                     page_content = getattr(doc, "page_content", None) or (doc.get("page_content") if isinstance(doc, dict) else str(doc))
-                    st.info(f"*Source {i+1}:* {source_meta.get('source', 'N/A')}\n\n*Content:* {page_content}")
+                    st.info(f"**Source {i+1}:** {source_meta.get('source', 'N/A')}\n\n**Content:** {page_content}")
 
 if prompt := st.chat_input(f"Ask about {selected_domain_ui}..."):
     st.session_state.messages[current_domain_key].append({"role": "user", "content": prompt})
@@ -88,7 +87,7 @@ if prompt := st.chat_input(f"Ask about {selected_domain_ui}..."):
                     for i, doc in enumerate(source_docs):
                         source_meta = getattr(doc, "metadata", None) or (doc.get("metadata") if isinstance(doc, dict) else {})
                         page_content = getattr(doc, "page_content", None) or (doc.get("page_content") if isinstance(doc, dict) else str(doc))
-                        st.info(f"*Source {i+1}:* {source_meta.get('source', 'N/A')}\n\n*Content:* {page_content}")
+                        st.info(f"**Source {i+1}:** {source_meta.get('source', 'N/A')}\n\n**Content:** {page_content}")
 
             assistant_message = {"role": "assistant", "content": result_text, "sources": source_docs}
             st.session_state.messages[current_domain_key].append(assistant_message)

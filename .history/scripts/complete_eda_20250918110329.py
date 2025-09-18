@@ -13,7 +13,7 @@ sns.set_palette("viridis")
 pd.set_option('display.max_columns', None)
 pd.set_option('display.max_colwidth', 200)
 
-BASE_DIR = Path(_file_).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_RAW = BASE_DIR / "data" / "raw"
 EDA_OUTPUT = BASE_DIR / "eda_output"
 EDA_OUTPUT.mkdir(exist_ok=True)
@@ -35,7 +35,7 @@ def analyze_outbreak_data():
     section_content = "\n## 1. Outbreaks Dataset Analysis\n\n"
     try:
         df = pd.read_csv(DATA_RAW / 'outbreaks_data.csv', low_memory=False)
-        section_content += f"*Dataset Shape:* {df.shape}\n\n"
+        section_content += f"**Dataset Shape:** {df.shape}\n\n"
         
         numeric_cols = ['Illnesses', 'Hospitalizations', 'Deaths']
         for col in numeric_cols:
@@ -47,7 +47,7 @@ def analyze_outbreak_data():
         missing_sorted = missing_values[missing_values > 0].sort_values(ascending=False)
         if not missing_sorted.empty:
             for col, count in missing_sorted.items():
-                section_content += f"- ⁠ {col} ⁠: {count} missing values ({count/len(df)*100:.1f}%)\n"
+                section_content += f"- `{col}`: {count} missing values ({count/len(df)*100:.1f}%)\n"
         else:
             section_content += "- No missing values found.\n"
 
@@ -80,7 +80,7 @@ def analyze_symptoms_data():
     section_content = "\n## 2. Symptoms Dataset Analysis\n\n"
     try:
         df = pd.read_csv(DATA_RAW / 'symptoms_data.csv')
-        section_content += f"*Dataset Shape:* {df.shape}\n\n"
+        section_content += f"**Dataset Shape:** {df.shape}\n\n"
         
         section_content += "### Analysis of Symptoms\n"
         fig, axes = plt.subplots(2, 1, figsize=(12, 16), gridspec_kw={'hspace': 0.4})
@@ -111,10 +111,10 @@ def analyze_misinformation_data():
     section_content = "\n## 3. Misinformation Dataset Analysis\n\n"
     try:
         df = pd.read_csv(DATA_RAW / 'misinformation_data.csv')
-        section_content += f"*Dataset Shape:* {df.shape}\n\n"
+        section_content += f"**Dataset Shape:** {df.shape}\n\n"
         
         df.dropna(subset=['text', 'title'], inplace=True)
-        section_content += f"*Shape after dropping empty text/title:* {df.shape}\n\n"
+        section_content += f"**Shape after dropping empty text/title:** {df.shape}\n\n"
         
         section_content += "### Class Distribution (Real vs. Fake)\n"
         class_dist_pct = df['label'].value_counts(normalize=True) * 100
@@ -148,5 +148,5 @@ def analyze_misinformation_data():
     
     return section_content
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     generate_eda_report()

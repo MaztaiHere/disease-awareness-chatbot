@@ -2,14 +2,14 @@
 langchain==0.1.16
 langchain-community==0.0.32
 langchain-huggingface==0.0.3
-langchain-chroma
+langchain-chroma==0.1.0
 chromadb==0.4.24
 
 # Local LLM runtime & bindings
 llama-cpp-python==0.2.20
 
 # Transformers & embeddings
-transformers
+transformers==4.38.2
 sentence-transformers==2.6.1
 huggingface-hub
 
