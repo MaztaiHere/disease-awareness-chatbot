@@ -5,6 +5,9 @@ vector_db/
 .idea/
 .vscode/
 .DS_Store
-data/ 
+data/
 models/
 .env
+/scripts
+
+
