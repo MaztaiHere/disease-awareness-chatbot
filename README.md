@@ -14,8 +14,8 @@ A sophisticated Retrieval-Augmented Generation (RAG) system that provides accura
 
 1. **Clone the repository**
 ```bash
-git clone https://github.com/your-username/medical-ai-assistant.git
-cd medical-ai-assistant
+git clone https://github.com/MaztaiHere/disease-awareness-chatbot/
+cd disease-awareness-chatbot
 ```
 
 2. **Create and activate virtual environment**
