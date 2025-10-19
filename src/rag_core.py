@@ -116,22 +116,22 @@ class MedicalRAG:
                 logging.warning("⚠️ GGUF model not found, skipping LLM init.")
                 return None
             
-            # Optimized for concise responses suitable for translation
+            # Better balanced settings for quality responses
             llm = LlamaCpp(
                 model_path=MODEL_PATH,
-                n_ctx=2048,  # Reduced context for faster processing
+                n_ctx=4096,  # Increased context for better understanding
                 n_threads=8,
                 n_batch=512,
                 n_gpu_layers=1,
-                temperature=0.1,  # Lower temperature for more factual responses
+                temperature=0.3,  # Slightly higher for better creativity
                 top_p=0.9,
                 repeat_penalty=1.1,
-                max_tokens=350,  # Reduced for concise responses suitable for translation
+                max_tokens=512,  # Increased for medium-length responses
                 verbose=False,
-                use_mlock=True,
+                use_mlock=False,
                 use_mmap=True,
             )
-            logging.info("🦙 Local LLM initialized with concise response settings")
+            logging.info("🦙 Mistral 7B initialized with balanced settings")
             return llm
         except Exception as e:
             logging.error(f"❌ Failed to initialize LLM: {e}")
@@ -228,28 +228,8 @@ class MedicalRAG:
                 logging.warning(f"⚠️ Could not init vector store for {domain}: {e}")
         return vector_stores
 
-    def _enhance_translation_query(self, query: str, source_lang: str) -> str:
-        """Add context to improve translation quality for medical terms."""
-        medical_context = ""
-        
-        # Medical context enhancement
-        medical_terms = {
-            "fever": ["காய்ச்சல்", "ज्वर", "বুখার", "حمى"],
-            "cough": ["இருமல்", "खांसी", "কাশি", "سعال"],
-            "headache": ["தலைவலி", "सिरदर्द", "মাথাব্যথা", "صداع الرأس"],
-            "outbreak": ["தொற்று", "प्रकोप", "প্রাদুর্ভাব", "تفشي"],
-            "symptom": ["அறிகுறி", "लक्षण", "লক্ষণ", "عرض"]
-        }
-        
-        for term, translations in medical_terms.items():
-            if any(translation in query for translation in translations):
-                medical_context = f" [medical context: {term}]"
-                break
-                
-        return query + medical_context
-
-    def translate_text(self, text: str, target_lang: str, source_lang: str = "en", step_name: str = "Translation") -> str:
-        """Improved translation with better quality settings and detailed logging."""
+    def translate_text(self, text: str, target_lang: str, source_lang: str = "en") -> str:
+        """Translate text between languages."""
         if not text.strip() or target_lang == source_lang:
             return text
             
@@ -264,287 +244,233 @@ class MedicalRAG:
             src_code = MBART_LANG_CODES[source_lang]
             tgt_code = MBART_LANG_CODES[target_lang]
             
-            # Enhance query for better translation of medical terms
-            enhanced_text = self._enhance_translation_query(text, source_lang)
-            
-            source_lang_name = LANGUAGE_NAMES.get(source_lang, source_lang)
-            target_lang_name = LANGUAGE_NAMES.get(target_lang, target_lang)
-            
-            logging.info(f"🌍 {step_name}: {source_lang_name} → {target_lang_name}")
-            logging.info(f"   📥 Input: {text}")
-            if enhanced_text != text:
-                logging.info(f"   🔧 Enhanced: {enhanced_text}")
+            logging.info(f"🌍 Translating from {source_lang} to {target_lang}")
             
             self.mbart_tokenizer.src_lang = src_code
-            encoded = self.mbart_tokenizer(enhanced_text, return_tensors="pt", truncation=True, max_length=512)
+            encoded = self.mbart_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
             
             generated = self.mbart_model.generate(
                 **encoded,
                 forced_bos_token_id=self.mbart_tokenizer.lang_code_to_id[tgt_code],
-                max_length=384,  # Reduced for shorter responses
-                num_beams=4,  # Slightly reduced for speed
-                early_stopping=True,
-                no_repeat_ngram_size=3,
-                length_penalty=0.8  # Slightly shorter outputs
+                max_length=600,
+                num_beams=4,
+                early_stopping=True
             )
             
             translated = self.mbart_tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
-            logging.info(f"   📤 Output: {translated}")
-            logging.info(f"   ✅ {step_name} completed")
             return translated
             
         except Exception as e:
-            logging.error(f"❌ {step_name} error ({source_lang}→{target_lang}): {e}")
+            logging.error(f"❌ Translation error: {e}")
             return text
 
     def _initialize_prompts(self):
-        """Concise prompts for shorter responses suitable for translation."""
+        """BETTER prompts for accurate, medium-length responses."""
         prompts = {
-            "symptom": """
-Based on the medical context, provide a clear and concise answer in 2-3 sentences maximum.
-Focus on the most relevant information. Be precise and avoid unnecessary details.
+            "symptom": """<s>[INST] You are a medical assistant. Provide a clear, accurate 3-4 sentence response.
 
-Context: {context}
-Question: {question}
+CONTEXT:
+{context}
 
-Concise Medical Answer:
-""",
+QUESTION: {question}
+
+GUIDELINES:
+- Provide specific medical information based on the context
+- Include key symptoms, causes, and when to seek medical attention
+- Be precise but comprehensive (3-4 sentences)
+- Only use information from the provided context
+- If context is insufficient, state "Consult a healthcare professional for proper diagnosis"
+
+RESPONSE: [/INST]""",
             
-            "outbreak": """
-Based on the outbreak data, provide a clear and concise summary in 2-3 sentences.
-Include only the most relevant details about locations, diseases, and key facts.
+            "outbreak": """<s>[INST] You are a public health official. Provide detailed outbreak information.
 
-Context: {context}
-Question: {question}
+CONTEXT:
+{context}
 
-Concise Outbreak Summary:
-""",
+QUESTION: {question}
+
+GUIDELINES:
+- List specific outbreaks with locations, dates, and case numbers when available
+- Include affected regions and key statistics
+- Mention public health recommendations
+- Provide 4-5 sentences with concrete information
+- If no specific outbreaks match, say "No matching outbreak information found in current data"
+
+RESPONSE: [/INST]""",
             
-            "misinformation": """
-Based on the factual information, provide a clear and concise response in 2-3 sentences.
-Address the question directly with evidence-based facts. Be straightforward.
+            "misinformation": """<s>[INST] You are a medical fact-checker. Provide a thorough fact-check.
 
-Context: {context}
-Question: {question}
+CONTEXT:
+{context}
 
-Factual Response:
-"""
+QUESTION: {question}
+
+GUIDELINES:
+- Clearly state if the claim is TRUE, FALSE, or MISLEADING
+- Provide specific evidence from the context
+- Explain the scientific basis for the verdict
+- Include 3-4 sentences with detailed explanation
+- If evidence is insufficient, state "Insufficient evidence to verify this claim"
+
+RESPONSE: [/INST]"""
         }
         return prompts
 
-    def _retrieve_documents(self, query: str, domain: str, k: int = 6) -> List[Document]:
-        """Retrieve documents with detailed logging."""
+    def _retrieve_documents(self, query: str, domain: str) -> List[Document]:
+        """Retrieve relevant documents with better coverage."""
         if domain not in self.vector_stores:
-            logging.error(f"❌ Domain '{domain}' not found in vector stores")
             return []
             
         try:
-            logging.info(f"🔍 Retrieving documents for domain: {domain}")
-            logging.info(f"   📝 Query: {query}")
-            
             retriever = self.vector_stores[domain].as_retriever(
                 search_type="similarity",
-                search_kwargs={"k": k}
+                search_kwargs={"k": 6}  # More documents for better context
             )
-            
             documents = retriever.invoke(query)
-            logging.info(f"   📚 Retrieved {len(documents)} documents")
-            
-            # Log document snippets
-            for i, doc in enumerate(documents[:2]):  # Show first 2 documents
-                snippet = doc.page_content[:120] + "..." if len(doc.page_content) > 120 else doc.page_content
-                logging.info(f"   📄 Doc {i+1}: {snippet}")
-            
-            if len(documents) > 2:
-                logging.info(f"   ... and {len(documents) - 2} more documents")
-                
             return documents
-            
         except Exception as e:
             logging.error(f"❌ Document retrieval error: {e}")
             return []
 
-    def _clean_context(self, context: str) -> str:
-        """Clean context while preserving key information."""
-        import re
-        # Remove report IDs but keep the actual content
-        cleaned = re.sub(r'(Outbreak Report ID|Report ID|ID)\s*\d+', '', context)
-        # Clean up multiple spaces
-        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-        return cleaned
-
-    def _extract_meaningful_content(self, documents: List[Document]) -> str:
-        """Extract and combine the most meaningful parts of documents with scoring."""
-        scored_documents = []
-        
-        for doc in documents:
-            content = self._clean_context(doc.page_content)
-            score = 0
-            
-            # Score based on relevance indicators
-            if any(keyword in content.lower() for keyword in ['confirmed', 'reported', 'cases', 'outbreak']):
-                score += 2
-            if any(keyword in content.lower() for keyword in ['symptoms', 'treatment', 'prevention', 'diagnosis']):
-                score += 2
-            if len(content) > 100:  # Prefer substantial content
-                score += 1
-            if 'metadata' in doc.metadata and doc.metadata.get('source'):
-                score += 1
-                
-            scored_documents.append((score, content))
-        
-        # Sort by score and take top documents
-        scored_documents.sort(key=lambda x: x[0], reverse=True)
-        meaningful_parts = [content for score, content in scored_documents if score > 0]
-        
-        # Combine and limit to reasonable length (reduced for shorter responses)
-        combined = "\n\n".join(meaningful_parts[:4])  # Use up to 4 meaningful documents
-        return combined[:1800]  # Reduced context limit for faster processing
-
     def _generate_response(self, query: str, documents: List[Document], domain: str) -> str:
-        """Generate concise, accurate responses suitable for translation."""
+        """Generate accurate, medium-length response using LLM."""
         if not self.llm:
-            logging.warning("⚠️ LLM not available, using fallback response")
-            return self._get_fallback_response(domain)
+            return "Consult a healthcare professional for accurate medical advice."
             
         try:
-            # Use meaningful content extraction
-            context = self._extract_meaningful_content(documents)
+            # Combine document content with better context
+            context_parts = []
+            for i, doc in enumerate(documents):
+                if doc.page_content.strip():
+                    # Take more content for better answers
+                    content = doc.page_content.strip()
+                    if len(content) > 600:
+                        content = content[:600] + "..."
+                    context_parts.append(f"Document {i+1}: {content}")
             
-            logging.info(f"🧠 Generating response with {len(context)} characters of context")
-            
-            if not context.strip():
-                logging.warning("⚠️ No meaningful context extracted, using fallback")
-                return self._get_fallback_response(domain)
+            context = "\n\n".join(context_parts)
             
             prompt_template = self.prompts.get(domain, self.prompts["symptom"])
             formatted_prompt = prompt_template.format(context=context, question=query)
             
-            logging.info(f"   📋 Using {domain} prompt template")
-            logging.info(f"   💭 Generating LLM response...")
-            
             response = self.llm.invoke(formatted_prompt)
-            cleaned_response = self._clean_response(response.strip())
             
-            logging.info(f"   📝 Raw LLM response: {response[:150]}...")
-            logging.info(f"   ✅ Final cleaned response: {cleaned_response}")
-            
+            # Better response cleaning and validation
+            cleaned_response = self._clean_and_validate_response(response.strip(), domain)
             return cleaned_response
             
         except Exception as e:
             logging.error(f"❌ Response generation error: {e}")
-            return self._get_fallback_response(domain)
+            return "Consult a healthcare professional for accurate medical advice."
 
-    def _clean_response(self, text: str) -> str:
-        """Clean response to ensure 2-3 concise sentences for translation."""
+    def _clean_and_validate_response(self, text: str, domain: str) -> str:
+        """Clean response while maintaining quality and appropriate length."""
         import re
         
-        # Remove prompt artifacts and extra whitespace
-        text = re.sub(r'^(Concise Medical Answer|Concise Outbreak Summary|Factual Response):\s*', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'\n+', ' ', text)
+        # Remove prompt artifacts
+        text = re.sub(r'\[/INST\]|\[INST\]|</s>|<s>', '', text)
         text = re.sub(r'\s+', ' ', text).strip()
         
-        # Ensure proper sentence structure
-        sentences = [s.strip() for s in text.split('.') if s.strip()]
-        sentences = [s for s in sentences if 10 < len(s) < 100]  # Filter for good sentence length
+        # Remove common hallucinations but be less restrictive
+        invalid_patterns = [
+            r'insert your name', r'my name is', r'as an ai', r'as a language model',
+            r'this is a test', r'hello there', r'hey there', r'good morning', r'good afternoon'
+        ]
         
-        if not sentences:
-            return self._get_fallback_response("general")
+        text_lower = text.lower()
+        for pattern in invalid_patterns:
+            if re.search(pattern, text_lower):
+                if domain == "misinformation":
+                    return "Insufficient evidence to verify this claim."
+                elif domain == "outbreak":
+                    return "No matching outbreak information found in current data."
+                else:
+                    return "Consult a healthcare professional for proper diagnosis."
         
-        # Take 2-3 concise sentences (reduced from 3-5)
-        selected_sentences = sentences[:3]
-        result = '. '.join(selected_sentences)
-        if not result.endswith('.'):
-            result += '.'
+        # Domain-specific validation
+        if domain == "outbreak":
+            # Ensure outbreak responses have specific information
+            if not any(word in text_lower for word in ['outbreak', 'cases', 'reported', 'confirmed', 'alert', 'incident']):
+                return "No matching outbreak information found in current data."
         
-        # Ensure response isn't too long for translation
-        if len(result) > 250:
-            result = result[:247] + '...'
+        elif domain == "misinformation":
+            # Ensure misinformation responses have verdict
+            if not any(word in text_lower for word in ['true', 'false', 'misleading', 'verdict', 'evidence']):
+                return "Insufficient evidence to verify this claim."
+        
+        # Ensure reasonable length (3-6 sentences, 300-600 chars)
+        sentences = re.split(r'[.!?]+', text)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        if len(sentences) > 6:
+            text = '. '.join(sentences[:6]) + '.'
+        elif len(sentences) < 2:
+            # If response is too short, provide appropriate fallback
+            if domain == "misinformation":
+                text = "Insufficient evidence to verify this claim. Consult reliable medical sources."
+            elif domain == "outbreak":
+                text = "No specific outbreak information available for this query in current data."
+            else:
+                text = "Consult a healthcare professional for proper medical advice."
+        
+        # Reasonable character limits for translation
+        if len(text) > 800:
+            text = text[:797] + '...'
             
-        return result
-
-    def _get_fallback_response(self, domain: str) -> str:
-        """Concise fallback responses suitable for translation."""
-        fallbacks = {
-            "outbreak": "Specific outbreak information is currently limited. Check official health sources like WHO for current updates.",
-            "symptom": "Consult healthcare professionals for accurate symptom assessment and treatment advice.",
-            "misinformation": "Verify health information with reliable medical sources and healthcare providers.",
-            "general": "Consult healthcare professionals for reliable medical information."
-        }
-        return fallbacks.get(domain, fallbacks["general"])
+        return text
 
     def query(self, user_query: str, domain: str, source_lang: str = "en", target_lang: str = None):
         """
-        Enhanced RAG pipeline with concise responses suitable for translation.
+        Improved RAG pipeline with better response quality.
         """
-        logging.info("=" * 70)
-        logging.info("🩺 MEDICAL RAG QUERY PROCESSING")
-        logging.info("=" * 70)
+        logging.info("=" * 60)
+        logging.info(f"🩺 QUERY: {domain} | {source_lang}")
+        logging.info("=" * 60)
         
         if not target_lang:
             target_lang = source_lang
 
         try:
-            # Step 1: Log initial query details
-            source_lang_name = LANGUAGE_NAMES.get(source_lang, source_lang)
-            target_lang_name = LANGUAGE_NAMES.get(target_lang, target_lang)
-            
-            logging.info(f"📥 INPUT QUERY:")
-            logging.info(f"   💬 Query: {user_query}")
-            logging.info(f"   🎯 Domain: {domain}")
-            logging.info(f"   🌐 Languages: {source_lang_name} → {target_lang_name}")
+            # Step 1: Log initial query
+            logging.info(f"📥 INPUT: {user_query}")
 
-            # Step 2: Translation to English (if needed)
+            # Step 2: Translate query to English if needed
             if source_lang != "en":
-                english_query = self.translate_text(user_query, "en", source_lang, "Query Translation")
-                logging.info(f"🔗 TRANSLATED QUERY: {english_query}")
+                english_query = self.translate_text(user_query, "en", source_lang)
+                logging.info(f"🔗 TRANSLATED: {english_query}")
             else:
                 english_query = user_query
-                logging.info(f"🔗 USING ORIGINAL QUERY (English)")
 
             # Step 3: Document retrieval
-            documents = self._retrieve_documents(english_query, domain, k=6)  # Reduced k for faster processing
-            total_context_chars = sum(len(doc.page_content) for doc in documents)
-            logging.info(f"📊 RETRIEVAL SUMMARY: {len(documents)} documents, {total_context_chars} total characters")
+            documents = self._retrieve_documents(english_query, domain)
+            logging.info(f"📚 Retrieved {len(documents)} documents")
 
-            # Step 4: Response generation
-            logging.info("🤖 GENERATING RESPONSE...")
-            raw_answer = self._generate_response(english_query, documents, domain)
-            logging.info(f"📝 GENERATED ENGLISH RESPONSE: {raw_answer}")
+            # Step 4: Generate English response
+            english_response = self._generate_response(english_query, documents, domain)
+            logging.info(f"📝 RESPONSE: {english_response}")
 
-            # Step 5: Back translation (if needed)
+            # Step 5: Translate response back if needed
             if target_lang != "en":
-                final_answer = self.translate_text(raw_answer, target_lang, "en", "Response Translation")
-                logging.info(f"🌐 FINAL TRANSLATED RESPONSE: {final_answer}")
+                final_response = self.translate_text(english_response, target_lang, "en")
+                logging.info(f"🌐 TRANSLATED: {final_response}")
             else:
-                final_answer = raw_answer
-                logging.info(f"🌐 USING ORIGINAL RESPONSE (English)")
+                final_response = english_response
 
-            # Prepare response
             response = {
-                "result": final_answer,
-                "source_documents": documents,
-                "processing_details": {
-                    "original_query": user_query,
-                    "translated_query": english_query if source_lang != "en" else user_query,
-                    "source_language": source_lang,
-                    "target_language": target_lang,
-                    "domain": domain,
-                    "documents_retrieved": len(documents)
-                }
+                "result": final_response,
+                "source_documents": documents
             }
             
-            logging.info("✅ QUERY PROCESSING COMPLETED")
-            logging.info("=" * 70)
+            logging.info("✅ COMPLETED")
+            logging.info("=" * 60)
             return response
 
         except Exception as e:
-            logging.error(f"❌ QUERY PROCESSING ERROR: {e}")
-            logging.info("=" * 70)
+            logging.error(f"❌ ERROR: {e}")
             return {
-                "result": self._get_fallback_response(domain), 
-                "source_documents": [],
-                "processing_details": {"error": str(e)}
+                "result": "Consult a healthcare professional for accurate medical advice.",
+                "source_documents": []
             }
 
 
@@ -555,14 +481,28 @@ Factual Response:
 if __name__ == "__main__":
     rag = MedicalRAG()
     
-    print("\n" + "="*60)
-    print("🩺 MEDICAL RAG ASSISTANT - CONCISE VERSION")
-    print("="*60)
+    print("\n" + "="*50)
+    print("🩺 MEDICAL RAG - MISTRAL 7B OPTIMIZED")
+    print("="*50)
     print("Type 'exit' to quit\n")
+    
+    # Test queries to demonstrate improved responses
+    test_queries = [
+        ("What outbreaks are there in Kerala in 2025?", "outbreak", "en", "en"),
+        ("I read that drinking hot water prevents COVID, is this true?", "misinformation", "en", "en"),
+        ("What are the symptoms of dengue fever?", "symptom", "en", "en")
+    ]
+    
+    for query, domain, src_lang, tgt_lang in test_queries:
+        print(f"\n🧪 TEST: {query}")
+        res = rag.query(query, domain=domain, source_lang=src_lang, target_lang=tgt_lang)
+        print(f"💡 ANSWER: {res['result']}")
+        print(f"📚 Sources: {len(res['source_documents'])} documents")
+        print("-" * 50)
     
     while True:
         try:
-            q = input("\n💬 Query: ").strip()
+            q = input("\n💬 Your Query: ").strip()
             if q.lower() == "exit":
                 break
             if not q:
@@ -573,15 +513,12 @@ if __name__ == "__main__":
             domain = input("📊 Domain (outbreak/symptom/misinformation): ").strip() or "symptom"
             
             if domain not in ["outbreak", "symptom", "misinformation"]:
-                print("❌ Invalid domain. Using 'symptom' as default.")
                 domain = "symptom"
             
-            print("\n" + "="*50)
             res = rag.query(q, domain=domain, source_lang=source_lang, target_lang=target_lang)
             print("\n💡 ANSWER:")
             print(res["result"])
-            print(f"\n📚 Sources: {len(res['source_documents'])} documents retrieved")
-            print("="*50)
+            print(f"\n📚 Sources: {len(res['source_documents'])} documents")
             
         except KeyboardInterrupt:
             print("\n\n👋 Exiting...")
