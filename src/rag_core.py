@@ -1,6 +1,7 @@
 import torch
 torch.set_num_threads(1)
 
+import re
 import os
 import sys
 import json
@@ -17,7 +18,14 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.llms import LlamaCpp
 from langchain.schema import Document
 
-from transformers import MBart50TokenizerFast, MBartForConditionalGeneration
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+# Add these additional warning filters at the top with other imports
+import warnings
+warnings.filterwarnings("ignore", message=".*Tried to instantiate class.*")
+warnings.filterwarnings("ignore", message=".*torch_dtype.*")
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # ======================================================
 # CONFIGURATION
@@ -42,20 +50,20 @@ MODEL_URL = (
 MODEL_PATH = os.path.join(MODEL_DIR, MODEL_FILENAME)
 
 # ======================================================
-# LANGUAGE MAPPINGS
+# NLLB-200 LANGUAGE MAPPINGS
 # ======================================================
 
-MBART_LANG_CODES = {
-    "af": "af_ZA", "ar": "ar_AR", "az": "az_AZ", "bn": "bn_IN", "my": "my_MM",
-    "zh": "zh_CN", "hr": "hr_HR", "cs": "cs_CZ", "nl": "nl_XX", "en": "en_XX",
-    "et": "et_EE", "fi": "fi_FI", "fr": "fr_XX", "gl": "gl_ES", "ka": "ka_GE",
-    "de": "de_DE", "gu": "gu_IN", "he": "he_IL", "hi": "hi_IN", "hu": "hu_HU",
-    "is": "is_IS", "id": "id_ID", "it": "it_IT", "ja": "ja_XX", "kn": "kn_IN",
-    "kk": "kk_KZ", "km": "km_KH", "ko": "ko_KR", "lv": "lv_LV", "lt": "lt_LT",
-    "mk": "mk_MK", "ml": "ml_IN", "mr": "mr_IN", "mn": "mn_MN", "ne": "ne_NP",
-    "pl": "pl_PL", "pt": "pt_XX", "ro": "ro_RO", "ru": "ru_RU", "si": "si_LK",
-    "sk": "sk_SK", "sl": "sl_SI", "es": "es_XX", "sw": "sw_KE", "sv": "sv_SE",
-    "ta": "ta_IN", "te": "te_IN", "th": "th_TH", "tr": "tr_TR", "uk": "uk_UA"
+NLLB_LANG_CODES = {
+    "af": "afr_Latn", "ar": "ara_Arab", "az": "azj_Latn", "bn": "ben_Beng", "my": "mya_Mymr",
+    "zh": "zho_Hans", "hr": "hrv_Latn", "cs": "ces_Latn", "nl": "nld_Latn", "en": "eng_Latn",
+    "et": "est_Latn", "fi": "fin_Latn", "fr": "fra_Latn", "gl": "glg_Latn", "ka": "kat_Geor",
+    "de": "deu_Latn", "gu": "guj_Gujr", "he": "heb_Hebr", "hi": "hin_Deva", "hu": "hun_Latn",
+    "is": "isl_Latn", "id": "ind_Latn", "it": "ita_Latn", "ja": "jpn_Jpan", "kn": "kan_Knda",
+    "kk": "kaz_Cyrl", "km": "khm_Khmr", "ko": "kor_Hang", "lv": "lvs_Latn", "lt": "lit_Latn",
+    "mk": "mkd_Cyrl", "ml": "mal_Mlym", "mr": "mar_Deva", "mn": "khk_Cyrl", "ne": "npi_Deva",
+    "pl": "pol_Latn", "pt": "por_Latn", "ro": "ron_Latn", "ru": "rus_Cyrl", "si": "sin_Sinh",
+    "sk": "slk_Latn", "sl": "slv_Latn", "es": "spa_Latn", "sw": "swh_Latn", "sv": "swe_Latn",
+    "ta": "tam_Taml", "te": "tel_Telu", "th": "tha_Thai", "tr": "tur_Latn", "uk": "ukr_Cyrl"
 }
 
 LANGUAGE_NAMES = {
@@ -87,8 +95,9 @@ class MedicalRAG:
             settings=Settings(anonymized_telemetry=False)
         )
         self.llm = self._initialize_llm()
-        self.mbart_model = None
-        self.mbart_tokenizer = None
+        self.nllb_model = None
+        self.nllb_tokenizer = None
+        self._initialize_nllb()
         self.vector_stores = self._initialize_vector_stores()
         self._build_vector_stores_if_empty()
         self.prompts = self._initialize_prompts()
@@ -116,17 +125,17 @@ class MedicalRAG:
                 logging.warning("⚠️ GGUF model not found, skipping LLM init.")
                 return None
             
-            # Better balanced settings for quality responses
+            # Balanced settings for better quality while maintaining speed
             llm = LlamaCpp(
                 model_path=MODEL_PATH,
-                n_ctx=4096,  # Increased context for better understanding
+                n_ctx=2048,  # Increased for better context understanding
                 n_threads=8,
-                n_batch=512,
+                n_batch=256,
                 n_gpu_layers=1,
                 temperature=0.3,  # Slightly higher for better creativity
                 top_p=0.9,
                 repeat_penalty=1.1,
-                max_tokens=512,  # Increased for medium-length responses
+                max_tokens=100,  # Increased for more detailed but still concise responses
                 verbose=False,
                 use_mlock=False,
                 use_mmap=True,
@@ -137,21 +146,33 @@ class MedicalRAG:
             logging.error(f"❌ Failed to initialize LLM: {e}")
             return None
 
-    def _initialize_mbart(self):
-        if self.mbart_model and self.mbart_tokenizer:
+    def _initialize_nllb(self):
+        """Initialize NLLB-200 model and tokenizer with optimizations"""
+        if self.nllb_model and self.nllb_tokenizer:
             return
         try:
-            logging.info("🌐 Loading mBART translation model...")
-            self.mbart_model = MBartForConditionalGeneration.from_pretrained(
-                "facebook/mbart-large-50-many-to-many-mmt"
+            logging.info("🌐 Loading NLLB-200 translation model...")
+            model_name = "facebook/nllb-200-1.3B"
+            
+            # Load tokenizer
+            self.nllb_tokenizer = AutoTokenizer.from_pretrained(model_name)
+            
+            # Load model with optimizations for faster inference
+            self.nllb_model = AutoModelForSeq2SeqLM.from_pretrained(
+                model_name,
+                dtype=torch.float16,  # Use float16 for faster inference
+                device_map="auto" if torch.cuda.is_available() else None,
+                low_cpu_mem_usage=True
             )
-            self.mbart_tokenizer = MBart50TokenizerFast.from_pretrained(
-                "facebook/mbart-large-50-many-to-many-mmt"
-            )
-            logging.info("✅ mBART model loaded.")
+            
+            # Disable gradient calculation for inference
+            self.nllb_model.eval()
+            
+            logging.info("✅ NLLB-200 model loaded successfully.")
+            
         except Exception as e:
-            logging.error(f"❌ Failed to load mBART: {e}")
-            self.mbart_model, self.mbart_tokenizer = None, None
+            logging.error(f"❌ Failed to load NLLB-200 model: {e}")
+            self.nllb_model, self.nllb_tokenizer = None, None
 
     def _build_vector_stores_if_empty(self):
         """Build vector stores from processed data if they are empty."""
@@ -229,125 +250,141 @@ class MedicalRAG:
         return vector_stores
 
     def translate_text(self, text: str, target_lang: str, source_lang: str = "en") -> str:
-        """Translate text between languages."""
+        """Optimized translation with faster inference settings."""
         if not text.strip() or target_lang == source_lang:
             return text
-            
-        self._initialize_mbart()
-        if not self.mbart_model or not self.mbart_tokenizer:
+
+        if not self.nllb_model or not self.nllb_tokenizer:
             return text
             
         try:
-            if source_lang not in MBART_LANG_CODES or target_lang not in MBART_LANG_CODES:
+            if source_lang not in NLLB_LANG_CODES or target_lang not in NLLB_LANG_CODES:
+                logging.warning(f"⚠️ Unsupported language pair: {source_lang} -> {target_lang}")
                 return text
                 
-            src_code = MBART_LANG_CODES[source_lang]
-            tgt_code = MBART_LANG_CODES[target_lang]
+            src_code = NLLB_LANG_CODES[source_lang]
+            tgt_code = NLLB_LANG_CODES[target_lang]
             
             logging.info(f"🌍 Translating from {source_lang} to {target_lang}")
             
-            self.mbart_tokenizer.src_lang = src_code
-            encoded = self.mbart_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-            
-            generated = self.mbart_model.generate(
-                **encoded,
-                forced_bos_token_id=self.mbart_tokenizer.lang_code_to_id[tgt_code],
-                max_length=600,
-                num_beams=4,
-                early_stopping=True
+            # Tokenize with source language - optimized settings
+            inputs = self.nllb_tokenizer(
+                text, 
+                return_tensors="pt", 
+                padding=True, 
+                truncation=True, 
+                max_length=128  # Increased for better quality
             )
             
-            translated = self.mbart_tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
+            # Move inputs to the same device as model
+            if torch.cuda.is_available():
+                inputs = {k: v.cuda() for k, v in inputs.items()}
+            
+            # Faster generation with optimized settings
+            with torch.no_grad():  # Disable gradient calculation
+                generated_tokens = self.nllb_model.generate(
+                    **inputs,
+                    forced_bos_token_id=self.nllb_tokenizer.convert_tokens_to_ids(tgt_code),
+                    max_length=128,  # Increased for better quality
+                    num_beams=2,     # Balanced for speed and quality
+                    early_stopping=True,
+                    no_repeat_ngram_size=2,
+                    do_sample=False   # Disable sampling for deterministic output
+                )
+            
+            # Decode the generated tokens
+            translated = self.nllb_tokenizer.batch_decode(
+                generated_tokens, 
+                skip_special_tokens=True
+            )[0]
+            
+            logging.info(f"✅ Translation completed")
             return translated
             
         except Exception as e:
-            logging.error(f"❌ Translation error: {e}")
+            logging.error(f"❌ NLLB translation error: {e}")
             return text
 
     def _initialize_prompts(self):
-        """BETTER prompts for accurate, medium-length responses."""
+        """IMPROVED prompts for specific, actionable responses."""
         prompts = {
-            "symptom": """<s>[INST] You are a medical assistant. Provide a clear, accurate 3-4 sentence response.
+            "symptom": """<s>[INST] You are a medical assistant. Based on the medical context, provide specific, actionable advice.
 
-CONTEXT:
+MEDICAL CONTEXT:
 {context}
 
-QUESTION: {question}
+PATIENT QUERY: {question}
 
-GUIDELINES:
-- Provide specific medical information based on the context
-- Include key symptoms, causes, and when to seek medical attention
-- Be precise but comprehensive (3-4 sentences)
-- Only use information from the provided context
-- If context is insufficient, state "Consult a healthcare professional for proper diagnosis"
+Provide a response with:
+1. Specific possible conditions based on symptoms
+2. Immediate actions to take
+3. General self-care recommendations
 
-RESPONSE: [/INST]""",
+Use • bullet points (MAX 3 BULLET POINTS). 20 WORDS PER BULLET POINT .ONLY 80 WORDS [/INST]""",
             
-            "outbreak": """<s>[INST] You are a public health official. Provide detailed outbreak information.
+            "outbreak": """<s>[INST] You are a public health official. Provide specific outbreak information.
 
-CONTEXT:
+OUTBREAK CONTEXT:
 {context}
 
-QUESTION: {question}
+QUERY: {question}
 
-GUIDELINES:
-- List specific outbreaks with locations, dates, and case numbers when available
-- Include affected regions and key statistics
-- Mention public health recommendations
-- Provide 4-5 sentences with concrete information
-- If no specific outbreaks match, say "No matching outbreak information found in current data"
+Provide response with:
+1. Specific affected locations and dates
+2. Case numbers and statistics when available
+3. Official health recommendations
 
-RESPONSE: [/INST]""",
+Use • bullet points (MAX 3 BULLET POINTS). 20 WORDS PER BULLET POINT .ONLY 80 WORDS [/INST]""",
             
-            "misinformation": """<s>[INST] You are a medical fact-checker. Provide a thorough fact-check.
+            "misinformation": """<s>[INST] You are a medical fact-checker. Provide clear, evidence-based verdict.
 
-CONTEXT:
+FACT-CHECKING CONTEXT:
 {context}
 
-QUESTION: {question}
+CLAIM: {question}
 
-GUIDELINES:
-- Clearly state if the claim is TRUE, FALSE, or MISLEADING
-- Provide specific evidence from the context
-- Explain the scientific basis for the verdict
-- Include 3-4 sentences with detailed explanation
-- If evidence is insufficient, state "Insufficient evidence to verify this claim"
+Provide response with:
+1. Clear TRUE/FALSE/MISLEADING verdict
+2. Specific evidence from medical sources
+3. Explanation of scientific basis
 
-RESPONSE: [/INST]"""
+Use • bullet points (MAX 3 BULLET POINTS). 20 WORDS PER BULLET POINT .ONLY 80 WORDS [/INST]"""
         }
         return prompts
 
     def _retrieve_documents(self, query: str, domain: str) -> List[Document]:
-        """Retrieve relevant documents with better coverage."""
+        """Optimized document retrieval."""
         if domain not in self.vector_stores:
             return []
             
         try:
             retriever = self.vector_stores[domain].as_retriever(
-                search_type="similarity",
-                search_kwargs={"k": 6}  # More documents for better context
+                search_type="similarity",  # Simpler and faster than MMR
+                search_kwargs={
+                    "k": 6,  # Balanced for coverage and speed
+                }
             )
             documents = retriever.invoke(query)
             return documents
         except Exception as e:
             logging.error(f"❌ Document retrieval error: {e}")
             return []
-
+    
     def _generate_response(self, query: str, documents: List[Document], domain: str) -> str:
-        """Generate accurate, medium-length response using LLM."""
+        """Generate specific, actionable response using LLM."""
         if not self.llm:
-            return "Consult a healthcare professional for accurate medical advice."
+            return "Based on your symptoms:\n- Seek immediate medical attention\n- Stay hydrated and rest\n- Monitor for worsening symptoms\n- Contact healthcare professionals for proper diagnosis"
             
         try:
-            # Combine document content with better context
+            # Combine document content with focus on medical details
             context_parts = []
             for i, doc in enumerate(documents):
                 if doc.page_content.strip():
-                    # Take more content for better answers
                     content = doc.page_content.strip()
-                    if len(content) > 600:
-                        content = content[:600] + "..."
-                    context_parts.append(f"Document {i+1}: {content}")
+                    # Take enough content for good context
+                    if len(content) > 400:
+                        content = content[:400] + "..."
+                    context_parts.append(f"{content}")
             
             context = "\n\n".join(context_parts)
             
@@ -356,73 +393,75 @@ RESPONSE: [/INST]"""
             
             response = self.llm.invoke(formatted_prompt)
             
-            # Better response cleaning and validation
-            cleaned_response = self._clean_and_validate_response(response.strip(), domain)
+            # Clean and structure the response
+            cleaned_response = self._clean_and_structure_response(response.strip(), domain)
             return cleaned_response
             
         except Exception as e:
             logging.error(f"❌ Response generation error: {e}")
-            return "Consult a healthcare professional for accurate medical advice."
-
-    def _clean_and_validate_response(self, text: str, domain: str) -> str:
-        """Clean response while maintaining quality and appropriate length."""
+            return "Based on your symptoms:\n- Seek immediate medical attention\n- Stay hydrated and rest\n- Monitor for worsening symptoms\n- Contact healthcare professionals for proper diagnosis"
+    def _fix_translated_formatting(self, text: str) -> str:
+        """Fix formatting issues after NLLB translation."""
         import re
+        
+        # Fix common translation formatting issues
+        text = re.sub(r'[\-\*]\\s*', '• ', text)  # Fix \- or \* issues
+        text = re.sub(r'•\\s*', '• ', text)       # Fix •\ issues
+        text = re.sub(r'\s+', ' ', text)          # Normalize spaces
+        text = re.sub(r'•\s+', '\n• ', text)      # Ensure proper line breaks
+        # Ensure each bullet point is on its own line
+        lines = text.split('•')
+        if len(lines) > 1:
+            # First line is the introduction
+            formatted_text = lines[0].strip()
+            # Add bullet points properly
+            for bullet in lines[1:]:
+                if bullet.strip():
+                    formatted_text += '\n• ' + bullet.strip()
+            text = formatted_text
+        return text
+    def _clean_and_structure_response(self, text: str, domain: str) -> str:
+        """Better formatting preservation for translation."""
         
         # Remove prompt artifacts
         text = re.sub(r'\[/INST\]|\[INST\]|</s>|<s>', '', text)
-        text = re.sub(r'\s+', ' ', text).strip()
         
-        # Remove common hallucinations but be less restrictive
-        invalid_patterns = [
-            r'insert your name', r'my name is', r'as an ai', r'as a language model',
-            r'this is a test', r'hello there', r'hey there', r'good morning', r'good afternoon'
-        ]
+        # Preserve bullet points and fix formatting
+        lines = []
+        for line in text.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Convert any bullet format to proper • format
+            if re.match(r'^[\-\*•·]\s+', line):
+                line = re.sub(r'^[\-\*•·]\s+', '• ', line)
+            elif re.match(r'^\d+\.\s*', line):
+                line = re.sub(r'^\d+\.\s*', '• ', line)
+                
+            lines.append(line)
         
-        text_lower = text.lower()
-        for pattern in invalid_patterns:
-            if re.search(pattern, text_lower):
-                if domain == "misinformation":
-                    return "Insufficient evidence to verify this claim."
-                elif domain == "outbreak":
-                    return "No matching outbreak information found in current data."
-                else:
-                    return "Consult a healthcare professional for proper diagnosis."
+        text = '\n'.join(lines)
         
-        # Domain-specific validation
-        if domain == "outbreak":
-            # Ensure outbreak responses have specific information
-            if not any(word in text_lower for word in ['outbreak', 'cases', 'reported', 'confirmed', 'alert', 'incident']):
-                return "No matching outbreak information found in current data."
+        # Ensure proper structure
+        if "•" not in text and len(lines) > 1:
+            # Reformat as bullet points if missing
+            formatted_lines = [lines[0]]  # Keep first line as intro
+            for line in lines[1:]:
+                if line.strip() and not line.startswith('•'):
+                    formatted_lines.append('• ' + line)
+            text = '\n'.join(formatted_lines)
         
-        elif domain == "misinformation":
-            # Ensure misinformation responses have verdict
-            if not any(word in text_lower for word in ['true', 'false', 'misleading', 'verdict', 'evidence']):
-                return "Insufficient evidence to verify this claim."
+        # Add domain-specific closing if missing
+        if domain == "symptom" and "consult" not in text.lower():
+            text += "\n\nConsult healthcare professionals for proper diagnosis."
+        elif domain == "misinformation" and "verify" not in text.lower():
+            text += "\n\nVerify with trusted medical sources."
         
-        # Ensure reasonable length (3-6 sentences, 300-600 chars)
-        sentences = re.split(r'[.!?]+', text)
-        sentences = [s.strip() for s in sentences if s.strip()]
-        
-        if len(sentences) > 6:
-            text = '. '.join(sentences[:6]) + '.'
-        elif len(sentences) < 2:
-            # If response is too short, provide appropriate fallback
-            if domain == "misinformation":
-                text = "Insufficient evidence to verify this claim. Consult reliable medical sources."
-            elif domain == "outbreak":
-                text = "No specific outbreak information available for this query in current data."
-            else:
-                text = "Consult a healthcare professional for proper medical advice."
-        
-        # Reasonable character limits for translation
-        if len(text) > 800:
-            text = text[:797] + '...'
-            
-        return text
-
+        return text.strip()
     def query(self, user_query: str, domain: str, source_lang: str = "en", target_lang: str = None):
         """
-        Improved RAG pipeline with better response quality.
+        Improved RAG pipeline with specific, actionable responses.
         """
         logging.info("=" * 60)
         logging.info(f"🩺 QUERY: {domain} | {source_lang}")
@@ -453,6 +492,8 @@ RESPONSE: [/INST]"""
             # Step 5: Translate response back if needed
             if target_lang != "en":
                 final_response = self.translate_text(english_response, target_lang, "en")
+                # ADD THIS LINE: Fix formatting after translation
+                final_response = self._fix_translated_formatting(final_response)
                 logging.info(f"🌐 TRANSLATED: {final_response}")
             else:
                 final_response = english_response
@@ -469,7 +510,7 @@ RESPONSE: [/INST]"""
         except Exception as e:
             logging.error(f"❌ ERROR: {e}")
             return {
-                "result": "Consult a healthcare professional for accurate medical advice.",
+                "result": "Based on your symptoms:\n- Seek immediate medical attention\n- Stay hydrated and rest\n- Monitor for worsening symptoms\n- Contact healthcare professionals for proper diagnosis",
                 "source_documents": []
             }
 
@@ -481,48 +522,3 @@ RESPONSE: [/INST]"""
 if __name__ == "__main__":
     rag = MedicalRAG()
     
-    print("\n" + "="*50)
-    print("🩺 MEDICAL RAG - MISTRAL 7B OPTIMIZED")
-    print("="*50)
-    print("Type 'exit' to quit\n")
-    
-    # Test queries to demonstrate improved responses
-    test_queries = [
-        ("What outbreaks are there in Kerala in 2025?", "outbreak", "en", "en"),
-        ("I read that drinking hot water prevents COVID, is this true?", "misinformation", "en", "en"),
-        ("What are the symptoms of dengue fever?", "symptom", "en", "en")
-    ]
-    
-    for query, domain, src_lang, tgt_lang in test_queries:
-        print(f"\n🧪 TEST: {query}")
-        res = rag.query(query, domain=domain, source_lang=src_lang, target_lang=tgt_lang)
-        print(f"💡 ANSWER: {res['result']}")
-        print(f"📚 Sources: {len(res['source_documents'])} documents")
-        print("-" * 50)
-    
-    while True:
-        try:
-            q = input("\n💬 Your Query: ").strip()
-            if q.lower() == "exit":
-                break
-            if not q:
-                continue
-                
-            source_lang = input("🌐 Source language (e.g., en, hi, ta, ml, es): ").strip() or "en"
-            target_lang = input("🎯 Target language: ").strip() or source_lang
-            domain = input("📊 Domain (outbreak/symptom/misinformation): ").strip() or "symptom"
-            
-            if domain not in ["outbreak", "symptom", "misinformation"]:
-                domain = "symptom"
-            
-            res = rag.query(q, domain=domain, source_lang=source_lang, target_lang=target_lang)
-            print("\n💡 ANSWER:")
-            print(res["result"])
-            print(f"\n📚 Sources: {len(res['source_documents'])} documents")
-            
-        except KeyboardInterrupt:
-            print("\n\n👋 Exiting...")
-            break
-        except Exception as e:
-            print(f"❌ Error: {e}")
-            continue

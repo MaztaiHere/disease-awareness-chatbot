@@ -1,5 +1,5 @@
 import streamlit as st
-import sys, os,time
+import sys, os, time
 
 # Fix imports when running from inside "src" directory
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -9,11 +9,40 @@ from rag_core import MedicalRAG, LANGUAGE_NAMES
 
 st.set_page_config(page_title="Medical AI Assistant", page_icon="⚕️", layout="wide")
 
+def format_text_for_display(text):
+    """Convert plain text with bullets and newlines to proper markdown format"""
+    if not text:
+        return text
+    
+    # Convert • to - for markdown compatibility
+    text = text.replace('•', '-')
+    
+    # Ensure bullet points have proper markdown formatting
+    text = text.replace('\n-', '\n-')
+    
+    # Add two spaces at the end of each line to force line breaks in markdown
+    lines = text.split('\n')
+    formatted_lines = []
+    
+    for line in lines:
+        if line.strip():  # If line has content
+            # For bullet points, ensure they start with -
+            if line.strip().startswith('-'):
+                formatted_lines.append(line)
+            else:
+                # For regular lines, add two spaces to force line break
+                formatted_lines.append(line + '  ')
+        else:
+            # Empty lines for paragraph breaks
+            formatted_lines.append('')
+    
+    return '\n'.join(formatted_lines)
 
 @st.cache_resource
 def load_rag_system():
     """Load the RAG once and keep models in memory"""
-    return MedicalRAG()
+    rag_system = MedicalRAG()
+    return rag_system
 
 rag_system = load_rag_system()
 
@@ -37,18 +66,18 @@ with st.sidebar:
     )
     if selected_language != st.session_state.language:
         st.session_state.language = selected_language
-        st.experimental_rerun()
+        st.rerun()
 
     st.subheader("Choose Domain:")
     if st.button("🩺 Symptom Analysis", use_container_width=True):
         st.session_state.selected_domain = "Symptom Analysis"
-        st.experimental_rerun()
+        st.rerun()
     if st.button("🚨 Outbreak Alerts", use_container_width=True):
         st.session_state.selected_domain = "Outbreak Alerts"
-        st.experimental_rerun()
+        st.rerun()
     if st.button("📢 Misinfo Check", use_container_width=True):
         st.session_state.selected_domain = "Misinformation Classification"
-        st.experimental_rerun()
+        st.rerun()
 
     st.info(f"**Current:** {st.session_state.selected_domain}")
     st.divider()
@@ -71,9 +100,13 @@ domain_titles = {
 
 st.subheader(domain_titles[current_domain_key])
 
+# Display chat messages
 for message in st.session_state.messages[current_domain_key]:
     with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+        # Format the text for proper markdown rendering
+        formatted_content = format_text_for_display(message["content"])
+        st.markdown(formatted_content)
+        
         if "sources" in message and message["sources"]:
             with st.expander("View Sources"):
                 for i, doc in enumerate(message["sources"]):
@@ -81,6 +114,7 @@ for message in st.session_state.messages[current_domain_key]:
                     page_content = getattr(doc, "page_content", None) or (doc.get("page_content") if isinstance(doc, dict) else str(doc))
                     st.info(f"*Source {i+1}:* {source_meta.get('source', 'N/A')}\n\n*Content:* {page_content}")
 
+# Chat input
 prompt = st.chat_input(f"Ask about {st.session_state.selected_domain}...")
 if prompt:
     st.session_state.messages[current_domain_key].append({"role": "user", "content": prompt})
@@ -88,7 +122,7 @@ if prompt:
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Analyzing — optimizing for speed..."):
+        with st.spinner("Analyzing"):
             t0 = time.time()
             response = rag_system.query(
                 prompt,
@@ -98,9 +132,12 @@ if prompt:
             )
             t1 = time.time()
             result_text = response.get("result") if isinstance(response, dict) else str(response)
-            st.markdown(result_text)
-            with st.expander("Performance"):
-                st.write(f"⏱️ Total time: {t1 - t0:.2f}s (goal: 3–5s)")
+            
+            # Format the text for proper markdown rendering
+            formatted_result = format_text_for_display(result_text)
+            st.markdown(formatted_result)
+            
+            
             source_docs = response.get("source_documents") if isinstance(response, dict) else None
             if source_docs:
                 with st.expander("View Sources"):
