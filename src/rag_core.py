@@ -1,6 +1,6 @@
 import torch
 torch.set_num_threads(1)
-
+torch.classes.__path__ = []
 import re
 import os
 import sys
@@ -49,35 +49,6 @@ MODEL_URL = (
 )
 MODEL_PATH = os.path.join(MODEL_DIR, MODEL_FILENAME)
 
-# ======================================================
-# NLLB-200 LANGUAGE MAPPINGS
-# ======================================================
-
-NLLB_LANG_CODES = {
-    "af": "afr_Latn", "ar": "ara_Arab", "az": "azj_Latn", "bn": "ben_Beng", "my": "mya_Mymr",
-    "zh": "zho_Hans", "hr": "hrv_Latn", "cs": "ces_Latn", "nl": "nld_Latn", "en": "eng_Latn",
-    "et": "est_Latn", "fi": "fin_Latn", "fr": "fra_Latn", "gl": "glg_Latn", "ka": "kat_Geor",
-    "de": "deu_Latn", "gu": "guj_Gujr", "he": "heb_Hebr", "hi": "hin_Deva", "hu": "hun_Latn",
-    "is": "isl_Latn", "id": "ind_Latn", "it": "ita_Latn", "ja": "jpn_Jpan", "kn": "kan_Knda",
-    "kk": "kaz_Cyrl", "km": "khm_Khmr", "ko": "kor_Hang", "lv": "lvs_Latn", "lt": "lit_Latn",
-    "mk": "mkd_Cyrl", "ml": "mal_Mlym", "mr": "mar_Deva", "mn": "khk_Cyrl", "ne": "npi_Deva",
-    "pl": "pol_Latn", "pt": "por_Latn", "ro": "ron_Latn", "ru": "rus_Cyrl", "si": "sin_Sinh",
-    "sk": "slk_Latn", "sl": "slv_Latn", "es": "spa_Latn", "sw": "swh_Latn", "sv": "swe_Latn",
-    "ta": "tam_Taml", "te": "tel_Telu", "th": "tha_Thai", "tr": "tur_Latn", "uk": "ukr_Cyrl"
-}
-
-LANGUAGE_NAMES = {
-    "af": "Afrikaans", "ar": "Arabic", "az": "Azerbaijani", "bn": "Bengali", "my": "Burmese",
-    "zh": "Chinese", "hr": "Croatian", "cs": "Czech", "nl": "Dutch", "en": "English",
-    "et": "Estonian", "fi": "Finnish", "fr": "French", "gl": "Galician", "ka": "Georgian",
-    "de": "German", "gu": "Gujarati", "he": "Hebrew", "hi": "Hindi", "hu": "Hungarian",
-    "is": "Icelandic", "id": "Indonesian", "it": "Italian", "ja": "Japanese", "kn": "Kannada",
-    "kk": "Kazakh", "km": "Khmer", "ko": "Korean", "lv": "Latvian", "lt": "Lithuanian",
-    "mk": "Macedonian", "ml": "Malayalam", "mr": "Marathi", "mn": "Mongolian", "ne": "Nepali",
-    "pl": "Polish", "pt": "Portuguese", "ro": "Romanian", "ru": "Russian", "si": "Sinhala",
-    "sk": "Slovak", "sl": "Slovenian", "es": "Spanish", "sw": "Swahili", "sv": "Swedish",
-    "ta": "Tamil", "te": "Telugu", "th": "Thai", "tr": "Turkish", "uk": "Ukrainian"
-}
 
 # ======================================================
 # CLASS DEFINITION
@@ -89,6 +60,8 @@ class MedicalRAG:
         os.makedirs(PERSIST_DIRECTORY, exist_ok=True)
         os.makedirs(MODEL_DIR, exist_ok=True)
         self._ensure_model_downloaded()
+        self.config_path = BASE_DIR / "language_config.json" # Adjust path if needed
+        self.nllb_lang_codes, self.language_names = self._load_language_config()
         self.embedding_function = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
         self.vector_store_client = chromadb.PersistentClient(
             path=PERSIST_DIRECTORY,
@@ -102,6 +75,19 @@ class MedicalRAG:
         self._build_vector_stores_if_empty()
         self.prompts = self._initialize_prompts()
         logging.info("✅ MedicalRAG system initialized successfully.\n")
+    def _load_language_config(self):
+        """Loads language config from JSON file."""
+        try:
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            logging.info(f"✅ Language config loaded from {self.config_path}")
+            return config.get("NLLB_LANG_CODES", {}), config.get("LANGUAGE_NAMES", {})
+        except FileNotFoundError:
+            logging.error(f"❌ Language config file not found: {self.config_path}")
+            return {}, {}
+        except json.JSONDecodeError:
+            logging.error(f"❌ Failed to decode language config JSON: {self.config_path}")
+            return {}, {}
 
     def _ensure_model_downloaded(self):
         if os.path.exists(MODEL_PATH):
@@ -135,7 +121,7 @@ class MedicalRAG:
                 temperature=0.3,  # Slightly higher for better creativity
                 top_p=0.9,
                 repeat_penalty=1.1,
-                max_tokens=100,  # Increased for more detailed but still concise responses
+                max_tokens=256,  # Increased for more detailed but still concise responses
                 verbose=False,
                 use_mlock=False,
                 use_mmap=True,
@@ -258,12 +244,13 @@ class MedicalRAG:
             return text
             
         try:
-            if source_lang not in NLLB_LANG_CODES or target_lang not in NLLB_LANG_CODES:
+            if source_lang not in self.nllb_lang_codes or target_lang not in self.nllb_lang_codes:
                 logging.warning(f"⚠️ Unsupported language pair: {source_lang} -> {target_lang}")
                 return text
                 
-            src_code = NLLB_LANG_CODES[source_lang]
-            tgt_code = NLLB_LANG_CODES[target_lang]
+            src_code = self.nllb_lang_codes[source_lang]
+            tgt_code = self.nllb_lang_codes[target_lang]
+            # --- END MODIFY ---
             
             logging.info(f"🌍 Translating from {source_lang} to {target_lang}")
             
@@ -273,7 +260,7 @@ class MedicalRAG:
                 return_tensors="pt", 
                 padding=True, 
                 truncation=True, 
-                max_length=128  # Increased for better quality
+                max_length=256  # Increased for better quality
             )
             
             # Move inputs to the same device as model

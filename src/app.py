@@ -5,7 +5,7 @@ import sys, os, time
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(BASE_DIR)
 
-from rag_core import MedicalRAG, LANGUAGE_NAMES
+from rag_core import MedicalRAG
 
 st.set_page_config(page_title="Medical AI Assistant", page_icon="⚕️", layout="wide")
 
@@ -45,13 +45,31 @@ def load_rag_system():
     return rag_system
 
 rag_system = load_rag_system()
+language_names_dict = rag_system.language_names
+lang_keys = list(language_names_dict.keys())
 
+# Check if the dictionary was loaded at all
+if not lang_keys:
+    st.error("🔴 CRITICAL: Failed to load language_config.json. Please check file location and content.")
+    st.stop() # Stop the app
+
+# --- FIX: INITIALIZE SESSION STATE *BEFORE* READING FROM IT ---
 if "messages" not in st.session_state:
     st.session_state.messages = {}
 if "language" not in st.session_state:
-    st.session_state.language = "en"
+    st.session_state.language = "en" # Default to 'en'
 if "selected_domain" not in st.session_state:
     st.session_state.selected_domain = "Symptom Analysis"
+# --- END FIX ---
+
+# Now, validate the language from session state
+default_index = 0
+if st.session_state.language in lang_keys:
+    default_index = lang_keys.index(st.session_state.language)
+else:
+    # If the default ('en') is not in the list, update session state to the first available language
+    st.session_state.language = lang_keys[0]
+    default_index = 0
 
 st.title("⚕️ Medical AI Assistant")
 st.caption("Multilingual Symptom Analysis, Outbreak Alerts & Misinformation Detection")
@@ -60,9 +78,9 @@ with st.sidebar:
     st.header("Settings")
     selected_language = st.selectbox(
         "Choose Language:",
-        options=list(LANGUAGE_NAMES.keys()),
-        format_func=lambda x: LANGUAGE_NAMES.get(x, x),
-        index=list(LANGUAGE_NAMES.keys()).index(st.session_state.language)
+        options=list(language_names_dict.keys()),
+        format_func=lambda x: language_names_dict.get(x, x),
+        index=list(language_names_dict.keys()).index(st.session_state.language)
     )
     if selected_language != st.session_state.language:
         st.session_state.language = selected_language
