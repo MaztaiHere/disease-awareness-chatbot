@@ -97,7 +97,17 @@ When you run `streamlit run src/app.py` for the first time:
    - Builds optimized indexes for fast retrieval
 
 ### Application Interface
-![Medical AI Assistant Interface](images/app-screenshot.png)
+
+The assistant features an intuitive web interface with a persistent sidebar for configuration and a main area for the chat conversation. Here is the assistant in action across its three core healthcare domains and in different languages:
+
+#### 🔍 Symptom Analysis (Demo in Malayalam)
+![Symptom Analysis](images/symptom-analysis-malayalam.png)
+
+#### 🚨 Outbreak Alerts (Demo in French)
+![Outbreak Alerts](images/outbreak-alerts-french.png)
+
+#### 🛡️ Misinformation Check (Demo in English)
+![Misinformation Check](images/misinformation-check-english.png)
 
 **Once loaded, you'll see:**
 - **Left Sidebar**: Language selector (50+ options) and domain chooser
